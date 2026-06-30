@@ -1,0 +1,116 @@
+# Roadmap Planner — deploy to Vercel + Supabase
+
+A Next.js port of the roadmap artifact. Data is stored as a single shared JSON
+document in Supabase, so everyone with the link sees and edits the same roadmap.
+
+---
+
+## Step 0 — Install Node.js (one time)
+
+This machine doesn't have Node yet. Install the LTS version:
+
+- Download the macOS installer from <https://nodejs.org> (the "LTS" button), **or**
+- If you use Homebrew: `brew install node`
+
+Then open a **new** terminal and confirm:
+
+```bash
+node -v   # should print v20.x or v22.x
+npm -v
+```
+
+## Step 1 — Install dependencies
+
+```bash
+cd ~/Documents/Claude/roadmap
+npm install
+```
+
+## Step 2 — Create the Supabase project + table
+
+1. Go to <https://supabase.com/dashboard> → **New project**. Pick a name, a strong
+   database password (save it), and the closest region. Wait ~2 minutes.
+2. Open **SQL Editor → New query**, paste the following, and click **Run**:
+
+   ```sql
+   -- One shared roadmap document, keyed by a fixed id 'main'.
+   create table if not exists roadmap (
+     id         text primary key,
+     items      jsonb not null default '[]'::jsonb,
+     updated_at timestamptz default now()
+   );
+
+   alter table roadmap enable row level security;
+
+   -- SHARED-BOARD policies: anyone with the anon key can read & write the doc.
+   -- Fine for an internal/trusted team board. See "Locking it down" below.
+   create policy "public read"   on roadmap for select using (true);
+   create policy "public insert" on roadmap for insert with check (true);
+   create policy "public update" on roadmap for update using (true) with check (true);
+   ```
+
+   (No row is seeded — the app creates the `main` row automatically on first save,
+   starting from the built-in default items.)
+
+3. Go to **Project Settings → API** and copy two values:
+   - **Project URL**
+   - **anon / public** key
+
+## Step 3 — Add your Supabase keys locally
+
+Edit `.env.local` (already created) and replace the placeholders with the two
+values from Step 2:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT-REF.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-public-key
+```
+
+## Step 4 — Run locally
+
+```bash
+npm run dev
+```
+
+Open <http://localhost:3000>. Add/edit/drag items, then refresh — they should
+persist. Check **Table Editor → roadmap** in Supabase to see the `main` row.
+
+## Step 5 — Push to GitHub
+
+```bash
+git init
+git add -A
+git commit -m "Roadmap planner: Next.js + Supabase"
+# then create a repo on github.com and:
+git remote add origin https://github.com/<you>/roadmap.git
+git branch -M main
+git push -u origin main
+```
+
+`.env.local` is gitignored — your keys will NOT be committed. Good.
+
+## Step 6 — Deploy to Vercel
+
+1. Go to <https://vercel.com/new>, **Import** the `roadmap` repo. Vercel
+   auto-detects Next.js; no build settings needed.
+2. Expand **Environment Variables** and add the same two as in Step 3:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+3. Click **Deploy**. You'll get a live `*.vercel.app` URL in ~1 minute.
+
+Every future `git push` to `main` auto-deploys.
+
+---
+
+## Notes & follow-ups
+
+- **Concurrency is last-write-wins.** Saves are debounced (~600ms). If two people
+  edit at the exact same moment, the later save wins. Fine for a small team. To
+  make edits sync live between open browsers, add Supabase **Realtime** (ask and
+  I'll wire it up — it's a small addition to `app/page.js`).
+- **Locking it down.** The policies above let anyone with the URL edit. To restrict
+  writing to signed-in users, add [Supabase Auth](https://supabase.com/docs/guides/auth)
+  and change the write policies from `with check (true)` to
+  `with check (auth.role() = 'authenticated')`.
+- **Data shape.** Each item: `{ id, title, area, version, ease, impact, confidence, link, group }`.
+  Stored together as one JSON array in `roadmap.items`, preserving drag-and-drop order.

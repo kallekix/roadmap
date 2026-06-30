@@ -6,6 +6,11 @@ import { supabase } from "@/lib/supabase";
 
 const GROUPS = ["Next", "Later", "Future"];
 
+// Only this signed-in user may edit. Everyone else (including logged-out
+// visitors) is read-only. The real enforcement lives in Supabase RLS — this
+// constant just drives the UI so non-editors don't see dead controls.
+const OWNER_EMAIL = "kalle@paulsson.net";
+
 const DEFAULT_ITEMS = [
   { id: 1, title: "Better data fetching", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group: "Next" },
   { id: 2, title: "Better navigation", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group: "Next" },
@@ -139,11 +144,15 @@ async function saveData(items) {
   }
 }
 
-export default function App() {
+// When `publicItems` is passed (by the server-rendered /v/<token> page), the
+// component runs in PUBLIC mode: read-only, Versions view only, no auth, no
+// Supabase access from the browser. Otherwise it's the private owner app.
+export default function App({ publicItems } = {}) {
+  const isPublic = Array.isArray(publicItems);
   const [mode, setMode] = useState("dark");
-  const [view, setView] = useState("main");
-  const [items, setItems] = useState(null);
-  const [loaded, setLoaded] = useState(false);
+  const [view, setView] = useState(isPublic ? "versions" : "main");
+  const [items, setItems] = useState(isPublic ? publicItems : null);
+  const [loaded, setLoaded] = useState(isPublic);
   const [editId, setEditId] = useState(null);
   const [adding, setAdding] = useState(null);
   const [newItem, setNewItem] = useState({});
@@ -152,21 +161,45 @@ export default function App() {
   const [overInfo, setOverInfo] = useState({ id: null, group: null });
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [isFs, setIsFs] = useState(false);
+  const [session, setSession] = useState(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPw, setAuthPw] = useState("");
+  const [authErr, setAuthErr] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const dragId_r = useRef(null);
   const editRowRef = useRef(null);
   const fileInputRef = useRef(null);
   const rootRef = useRef(null);
   const saveTimer = useRef(null);
 
-  useEffect(() => { loadData().then(d => { setItems(d || DEFAULT_ITEMS); setLoaded(true); }); }, []);
+  // Load the doc only for the signed-in owner. Reads are locked to the owner by
+  // RLS, so there is nothing to fetch (and nothing to show) for anyone else.
+  useEffect(() => {
+    if (isPublic) return;
+    const isOwner = !!session && session.user && session.user.email === OWNER_EMAIL;
+    if (!isOwner) { setItems(null); setLoaded(false); return; }
+    loadData().then(d => { setItems(d || DEFAULT_ITEMS); setLoaded(true); });
+  }, [session, isPublic]);
+
+  // Track the Supabase auth session (persisted in localStorage by supabase-js).
+  useEffect(() => {
+    if (isPublic) return;
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, [isPublic]);
 
   // Debounced save: batches rapid edits (e.g. typing) into one network write.
+  // Only the owner writes — RLS rejects anyone else, so don't even attempt it
+  // (avoids a failed write firing on every page load for read-only visitors).
   useEffect(() => {
-    if (!loaded || !items) return;
+    if (isPublic || !loaded || !items) return;
+    const isOwner = !!session && session.user && session.user.email === OWNER_EMAIL;
+    if (!isOwner) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => { saveData(items); }, 600);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [items, loaded]);
+  }, [items, loaded, session]);
 
   useEffect(() => {
     if (editId == null && adding == null) return;
@@ -191,6 +224,25 @@ export default function App() {
   }, []);
 
   const C = PALETTES[mode];
+  const canEdit = !isPublic && !!session && session.user && session.user.email === OWNER_EMAIL;
+
+  // Private app: anyone who isn't the signed-in owner sees only a sign-in card —
+  // never the board or the built-in default items.
+  if (!isPublic && !canEdit) {
+    const gateInput = { width: "100%", fontSize: 14, border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "8px 10px", background: C.inputBg, color: C.textPrimary, boxSizing: "border-box" };
+    return (
+      <div style={{ background: C.pageBg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, fontFamily: "var(--font-sans)" }}>
+        <form onSubmit={signIn} style={{ background: C.cardBg, border: `1px solid ${C.cardBorder}`, borderRadius: 12, padding: 24, maxWidth: 340, width: "100%", boxShadow: C.shadow }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary, marginBottom: 4 }}>Roadmap</div>
+          <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 16 }}>Sign in to view and edit.</div>
+          <input type="email" placeholder="Email" autoFocus value={authEmail} onChange={e => setAuthEmail(e.target.value)} style={{ ...gateInput, marginBottom: 8 }} />
+          <input type="password" placeholder="Password" value={authPw} onChange={e => setAuthPw(e.target.value)} style={{ ...gateInput, marginBottom: 14 }} />
+          {authErr && <div style={{ fontSize: 12, color: "#e5484d", marginBottom: 12 }}>{authErr}</div>}
+          <button type="submit" disabled={authBusy} style={{ width: "100%", background: C.accent, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 500, padding: "9px 14px", opacity: authBusy ? 0.6 : 1 }}>{authBusy ? "Signing in…" : "Sign in"}</button>
+        </form>
+      </div>
+    );
+  }
 
   if (!items) return <div style={{ padding: "2rem", fontSize: 13, color: C.textSecondary }}>Loading…</div>;
 
@@ -211,6 +263,16 @@ export default function App() {
     else if (e.key === "Escape") { isNew ? setAdding(null) : setEditId(null); }
   }
   function switchView(v) { setView(v); setEditId(null); setAdding(null); }
+
+  async function signIn(e) {
+    e.preventDefault();
+    setAuthBusy(true); setAuthErr("");
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPw });
+    setAuthBusy(false);
+    if (error) { setAuthErr(error.message); return; }
+    setAuthPw("");
+  }
+  async function signOut() { await supabase.auth.signOut(); }
 
   function toggleFullscreen() {
     const el = rootRef.current;
@@ -415,7 +477,7 @@ export default function App() {
                       onDragEnd={allowDrag ? (() => { setDragId(null); setOverInfo({ id: null, group: null }); }) : undefined}
                       onDragOver={allowDrag ? (e => { e.preventDefault(); e.stopPropagation(); setOverInfo({ id: item.id, group: label }); }) : undefined}
                       onDrop={allowDrag ? (e => { e.stopPropagation(); handleDrop(label, item.id); }) : undefined}
-                      onDoubleClick={() => { if (!editing) { setEditId(item.id); setAdding(null); } }}
+                      onDoubleClick={() => { if (canEdit && !editing) { setEditId(item.id); setAdding(null); } }}
                       onKeyDown={editing ? (e => onEditKeyDown(e, false)) : undefined}
                       style={{
                         borderBottom: idx === rows.length - 1 ? "none" : `1px solid ${C.rowBorder}`,
@@ -466,16 +528,24 @@ export default function App() {
     <div ref={rootRef} style={{ background: C.pageBg, minHeight: "100vh", height: isFs ? "100vh" : undefined, overflowY: isFs ? "auto" : undefined, padding: "1.25rem 0.5rem", fontFamily: "var(--font-sans)" }}>
       <h2 className="sr-only">Product roadmap planner</h2>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem", padding: "0 4px", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "inline-flex", gap: 2, background: C.tabBg, border: `1px solid ${C.cardBorder}`, borderRadius: 9, padding: 3 }}>
-          {tabBtn("main", "Main")}
-          {tabBtn("versions", "Versions")}
-        </div>
+        {isPublic
+          ? <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px" }}>Roadmap — Versions</div>
+          : (
+            <div style={{ display: "inline-flex", gap: 2, background: C.tabBg, border: `1px solid ${C.cardBorder}`, borderRadius: 9, padding: 3 }}>
+              {tabBtn("main", "Main")}
+              {tabBtn("versions", "Versions")}
+            </div>
+          )}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input ref={fileInputRef} type="file" accept=".csv,text/csv" style={{ display: "none" }}
-            onChange={e => { const f = e.target.files && e.target.files[0]; if (f) importCsv(f); e.target.value = ""; }} />
-          <button onClick={() => fileInputRef.current && fileInputRef.current.click()} style={toolBtn} aria-label="Import from CSV">
-            <Icon name="upload" size={15} /> Import CSV
-          </button>
+          {canEdit && (
+            <>
+              <input ref={fileInputRef} type="file" accept=".csv,text/csv" style={{ display: "none" }}
+                onChange={e => { const f = e.target.files && e.target.files[0]; if (f) importCsv(f); e.target.value = ""; }} />
+              <button onClick={() => fileInputRef.current && fileInputRef.current.click()} style={toolBtn} aria-label="Import from CSV">
+                <Icon name="upload" size={15} /> Import CSV
+              </button>
+            </>
+          )}
           <button onClick={exportCsv} style={toolBtn} aria-label="Export as CSV">
             <Icon name="download" size={15} /> Export CSV
           </button>
@@ -485,11 +555,14 @@ export default function App() {
           <button onClick={toggleFullscreen} style={{ ...toolBtn, padding: "5px 9px" }} aria-label={isFs ? "Exit fullscreen" : "Enter fullscreen"} title={isFs ? "Exit fullscreen" : "Fullscreen"}>
             <Icon name={isFs ? "minimize" : "maximize"} size={16} />
           </button>
+          {!isPublic && session && (
+            <button onClick={signOut} style={toolBtn} aria-label="Sign out">Sign out</button>
+          )}
         </div>
       </div>
 
-      {view === "main" && [...GROUPS, ...[...new Set(items.map(i => (i.group || "").trim()))].filter(g => g && !GROUPS.includes(g))].map(group =>
-        GroupCard({ label: group, rows: items.filter(i => (i.group || "").trim() === group), allowDrag: true })
+      {!isPublic && view === "main" && [...GROUPS, ...[...new Set(items.map(i => (i.group || "").trim()))].filter(g => g && !GROUPS.includes(g))].map(group =>
+        GroupCard({ label: group, rows: items.filter(i => (i.group || "").trim() === group), allowDrag: canEdit })
       )}
 
       {view === "versions" && (

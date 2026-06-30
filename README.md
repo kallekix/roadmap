@@ -114,3 +114,33 @@ Every future `git push` to `main` auto-deploys.
   `with check (auth.role() = 'authenticated')`.
 - **Data shape.** Each item: `{ id, title, area, version, ease, impact, confidence, link, group }`.
   Stored together as one JSON array in `roadmap.items`, preserving drag-and-drop order.
+
+---
+
+## Private app + shareable read-only Versions link
+
+The app now runs in three modes:
+
+- **`/` (owner only).** Reads are locked to the owner by RLS, so non-owners get a
+  sign-in screen — never the board or the default items. Sign in to view/edit.
+- **`/v/<SHARE_TOKEN>` (public, read-only).** A server component reads the doc with
+  the secret key, exposes **only items that have a version**, and renders them
+  read-only. Main-only items never reach the browser. Any wrong token → 404.
+
+### Required RLS (run once in SQL Editor)
+
+```sql
+-- Reads are owner-only now (the public Versions route uses the secret key instead).
+drop policy if exists "public read" on roadmap;
+create policy "owner read" on roadmap for select
+  using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+```
+
+### Extra environment variables
+
+| Variable | Where | Notes |
+|---|---|---|
+| `SUPABASE_SERVICE_ROLE_KEY` | `.env.local` **and** Vercel | The `sb_secret_…` key. Server-only — no `NEXT_PUBLIC_` prefix, never committed. |
+| `SHARE_TOKEN` | `.env.local` **and** Vercel | Long random string. The public view lives at `/v/<this>`. Change it to revoke the old link. |
+
+Share link: `https://<your-app>.vercel.app/v/<SHARE_TOKEN>`

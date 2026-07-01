@@ -113,6 +113,22 @@ function ConfInput({ val, onChange, C }) {
   );
 }
 
+// Textarea that grows vertically with its content. Enter inserts a newline
+// (we stop it bubbling to the row's Enter-to-commit handler).
+function AutoTextarea({ val, onChange, C, placeholder }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
+  }, [val]);
+  return (
+    <textarea ref={ref} rows={1} placeholder={placeholder} value={val}
+      onChange={e => onChange(e.target.value)}
+      onKeyDown={e => { if (e.key === "Enter") e.stopPropagation(); }}
+      style={{ width: "100%", fontSize: 12, marginTop: 6, padding: "4px 7px", border: `1px solid ${C.cardBorder}`, borderRadius: 6, background: C.inputBg, color: C.textPrimary, boxSizing: "border-box", resize: "none", overflow: "hidden", lineHeight: 1.4, fontFamily: "inherit" }} />
+  );
+}
+
 // --- Persistence: the whole items array is stored as ONE JSON document in
 // Supabase (table `roadmap`, row id = 'main'), shared by everyone. This mirrors
 // the original artifact, which saved the array as a single blob.
@@ -252,7 +268,7 @@ export default function App({ publicItems } = {}) {
   const update = (id, f, v) => setItems(p => p.map(i => i.id === id ? { ...i, [f]: v } : i));
   const remove = id => setItems(p => p.filter(i => i.id !== id));
 
-  function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group }); }
+  function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", description: "", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group }); }
   function commitAdd() {
     if (!newItem.title.trim()) { setAdding(null); return; }
     setItems(p => [...p, { ...newItem, id: nextId, title: newItem.title.trim() }]);
@@ -295,7 +311,7 @@ export default function App({ publicItems } = {}) {
         if (!data.length) return;
         const header = data[0].map(h => String(h).trim().toLowerCase());
         const col = name => header.indexOf(name);
-        const ci = { title: col("initiative"), area: col("area"), version: col("version"), ease: col("ease"), impact: col("impact"), confidence: col("confidence"), link: col("link"), group: col("group") };
+        const ci = { title: col("initiative"), description: col("description"), area: col("area"), version: col("version"), ease: col("ease"), impact: col("impact"), confidence: col("confidence"), link: col("link"), group: col("group") };
         const cleanLink = str => String(str || "").replace(/^\s*figma\s*[-–—:]\s*/i, "").trim();
         const cell = (row, idx) => idx >= 0 && idx < row.length ? String(row[idx]).trim() : "";
         const parsed = data.slice(1).map((row, idx) => {
@@ -303,6 +319,7 @@ export default function App({ publicItems } = {}) {
           return {
             id: idx + 1,
             title: cell(row, ci.title),
+            description: cell(row, ci.description),
             area: cell(row, ci.area),
             version: cell(row, ci.version),
             ease: Number(cell(row, ci.ease)) || 0,
@@ -318,13 +335,13 @@ export default function App({ publicItems } = {}) {
   }
 
   function exportCsv() {
-    const headers = ["Initiative", "Area", "Version", "Score", "Ease", "Impact", "Confidence", "Link", "Group"];
+    const headers = ["Initiative", "Description", "Area", "Version", "Score", "Ease", "Impact", "Confidence", "Link", "Group"];
     const esc = v => {
       const str = String(v ?? "");
       return /[",\n\r]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
     };
     const lines = items.map(i => [
-      i.title, i.area, i.version,
+      i.title, i.description || "", i.area, i.version,
       Math.round(score(i) * 10) / 10,
       i.ease, i.impact,
       i.confidence === "" ? "" : i.confidence,
@@ -388,19 +405,23 @@ export default function App({ publicItems } = {}) {
   function renderEditRow(item, isNew) {
     const it = isNew ? newItem : item;
     const set = isNew ? (f, v) => setNewItem(n => ({ ...n, [f]: v })) : (f, v) => update(item.id, f, v);
+    const ec = { ...cellBase, verticalAlign: "top" }; // top-align edit cells against the tall description
     return (
       <>
-        <td style={{ ...cellBase, color: C.textTertiary, textAlign: "center" }}><Icon name="grip" size={14} /></td>
-        <td style={cellBase}><input autoFocus={isNew} placeholder="Initiative…" value={it.title} onChange={e => set("title", e.target.value)} style={inputStyle} /></td>
-        <td style={cellBase}><input placeholder="Area" value={it.area} onChange={e => set("area", e.target.value)} style={inputStyle} /></td>
-        <td style={cellBase}><input placeholder="2.0" value={it.version} onChange={e => set("version", e.target.value)} style={inputStyle} /></td>
-        <td style={{ ...cellBase, textAlign: "right" }}><ScoreCell score={it.ease * it.impact * (Number(it.confidence) || 0)} C={C} /></td>
-        <td style={{ ...cellBase, textAlign: "right" }}><NumInput val={it.ease} onChange={v => set("ease", v)} C={C} min={0} max={10} step={1} /></td>
-        <td style={{ ...cellBase, textAlign: "right" }}><NumInput val={it.impact} onChange={v => set("impact", v)} C={C} min={0} max={10} step={1} /></td>
-        <td style={{ ...cellBase, textAlign: "right" }}><ConfInput val={it.confidence} onChange={v => set("confidence", v)} C={C} /></td>
-        <td style={cellBase}><input placeholder="URL…" value={it.link} onChange={e => set("link", e.target.value)} style={{ ...inputStyle, fontSize: 12 }} /></td>
-        <td style={cellBase} />
-        <td style={{ ...cellBase, textAlign: "center", paddingRight: 18 }}>{!isNew && (
+        <td style={{ ...ec, color: C.textTertiary, textAlign: "center" }}><Icon name="grip" size={14} /></td>
+        <td style={ec}>
+          <input autoFocus={isNew} placeholder="Initiative…" value={it.title} onChange={e => set("title", e.target.value)} style={inputStyle} />
+          <AutoTextarea val={it.description || ""} onChange={v => set("description", v)} C={C} placeholder="Description…" />
+        </td>
+        <td style={ec}><input placeholder="Area" value={it.area} onChange={e => set("area", e.target.value)} style={inputStyle} /></td>
+        <td style={ec}><input placeholder="2.0" value={it.version} onChange={e => set("version", e.target.value)} style={inputStyle} /></td>
+        <td style={{ ...ec, textAlign: "right" }}><ScoreCell score={it.ease * it.impact * (Number(it.confidence) || 0)} C={C} /></td>
+        <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.ease} onChange={v => set("ease", v)} C={C} min={0} max={10} step={1} /></td>
+        <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.impact} onChange={v => set("impact", v)} C={C} min={0} max={10} step={1} /></td>
+        <td style={{ ...ec, textAlign: "right" }}><ConfInput val={it.confidence} onChange={v => set("confidence", v)} C={C} /></td>
+        <td style={ec}><input placeholder="URL…" value={it.link} onChange={e => set("link", e.target.value)} style={{ ...inputStyle, fontSize: 12 }} /></td>
+        <td style={ec} />
+        <td style={{ ...ec, textAlign: "center", padding: "11px 18px 11px 12px" }}>{!isNew && (
           <button onClick={() => setConfirmDelete(item.id)} title="Delete initiative" aria-label="Delete initiative"
             style={{ background: mode === "dark" ? "rgba(229,72,77,0.16)" : "rgba(229,72,77,0.1)", border: "1px solid rgba(229,72,77,0.55)", borderRadius: 7, cursor: "pointer", color: "#e5484d", padding: "5px 8px", display: "inline-flex", alignItems: "center" }}>
             <Icon name="trash" size={15} />
@@ -414,7 +435,14 @@ export default function App({ publicItems } = {}) {
     return (
       <>
         <td style={{ ...cellBase, color: C.textTertiary, textAlign: "center" }}><Icon name="grip" size={14} /></td>
-        <td style={cellBase} title={item.title}><div style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: "1.35", overflowWrap: "anywhere" }}>{item.title}</div></td>
+        <td style={cellBase} title={item.description && String(item.description).trim() ? item.description : undefined}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+            <div style={{ flex: 1, minWidth: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: "1.35", overflowWrap: "anywhere" }}>{item.title}</div>
+            {item.description && String(item.description).trim() && (
+              <span style={{ color: C.textTertiary, display: "inline-flex", flexShrink: 0, marginTop: 1 }}><Icon name="info" size={14} /></span>
+            )}
+          </div>
+        </td>
         <td style={cellBase}>{item.area ? (() => { const a = areaStyle(item.area, mode); return <span style={{ background: a.bg, color: a.color, fontSize: 12, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{item.area}</span>; })() : null}</td>
         <td style={{ ...cellBase, color: C.textSecondary }}>{item.version}</td>
         <td style={{ ...cellBase, textAlign: "right" }}><ScoreCell score={score(item)} C={C} /></td>

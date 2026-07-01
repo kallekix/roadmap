@@ -15,8 +15,9 @@ export default async function PublicVersions({ params }) {
   // Obscure-URL gate: only the exact secret token resolves; everything else 404s.
   if (!expected || token !== expected) notFound();
 
-  // Read server-side with the secret key (bypasses RLS), then expose ONLY
-  // version-bearing items. Main-only items never leave the server.
+  // Read server-side with the secret key (bypasses RLS). The public view shows
+  // every initiative — version groups plus an "Unassigned initiatives" section —
+  // so we pass the full list. NOTE: all items are exposed on this obscure URL.
   const admin = createAdminClient();
   const { data } = await admin
     .from("roadmap")
@@ -25,7 +26,6 @@ export default async function PublicVersions({ params }) {
     .maybeSingle();
 
   const all = data && Array.isArray(data.items) ? data.items : [];
-  const versionItems = all.filter((i) => String(i.version || "").trim() !== "");
 
-  return <App publicItems={versionItems} />;
+  return <App publicItems={all} />;
 }

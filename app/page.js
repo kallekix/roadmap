@@ -595,11 +595,26 @@ export default function App({ publicItems } = {}) {
 
       {view === "versions" && (
         versions.length === 0
-          ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No initiatives have a version set yet. Add a version to an item in the Main view to see it grouped here.</div>
+          ? (!isPublic ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No initiatives have a version set yet. Add a version to an item in the Main view to see it grouped here.</div> : null)
           : versions.map(v =>
             GroupCard({ label: v, rows: items.filter(i => (i.version || "").trim() === v), allowDrag: false })
           )
       )}
+
+      {isPublic && (() => {
+        const unassigned = items.filter(i => (i.version || "").trim() === "");
+        const groups = [...GROUPS, ...[...new Set(unassigned.map(i => (i.group || "").trim()))].filter(g => g && !GROUPS.includes(g))]
+          .filter(g => unassigned.some(i => (i.group || "").trim() === g));
+        if (!groups.length) return null;
+        return (
+          <>
+            <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px", marginTop: "0.5rem", marginBottom: "1rem" }}>Unassigned initiatives</div>
+            {groups.map(group =>
+              GroupCard({ label: group, rows: unassigned.filter(i => (i.group || "").trim() === group), allowDrag: false })
+            )}
+          </>
+        );
+      })()}
 
       {confirmDelete != null && (() => {
         const target = items.find(i => i.id === confirmDelete);

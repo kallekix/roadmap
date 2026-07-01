@@ -378,11 +378,12 @@ export default function App({ publicItems } = {}) {
     const fromId = dragId_r.current;
     if (fromId == null) return;
     setItems(prev => {
+      if (targetId === fromId) return prev; // dropped onto itself → leave in place
       let arr = [...prev];
       const fromIdx = arr.findIndex(i => i.id === fromId);
       const moved = { ...arr[fromIdx], group: targetGroup };
       arr.splice(fromIdx, 1);
-      if (targetId != null && targetId !== fromId) {
+      if (targetId != null) {
         const toIdx = arr.findIndex(i => i.id === targetId);
         arr.splice(toIdx, 0, moved);
       } else {

@@ -60,6 +60,8 @@ function Icon({ name, size = 16, style }) {
   switch (name) {
     case "chevron-right": return <svg {...s}><path d="M9 6l6 6-6 6" /></svg>;
     case "chevron-down": return <svg {...s}><path d="M6 9l6 6 6-6" /></svg>;
+    case "chevron-up": return <svg {...s}><path d="M6 15l6-6 6 6" /></svg>;
+    case "unfold": return <svg {...s}><path d="M8 9l4-4 4 4" /><path d="M8 15l4 4 4-4" /></svg>;
     case "grip": return <svg {...s} strokeWidth={0} fill="currentColor"><circle cx="9" cy="6" r="1.4" /><circle cx="9" cy="12" r="1.4" /><circle cx="9" cy="18" r="1.4" /><circle cx="15" cy="6" r="1.4" /><circle cx="15" cy="12" r="1.4" /><circle cx="15" cy="18" r="1.4" /></svg>;
     case "info": return <svg {...s}><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></svg>;
     case "plus": return <svg {...s}><path d="M12 5v14" /><path d="M5 12h14" /></svg>;
@@ -81,7 +83,7 @@ function InfoIcon({ tip, color }) {
 function ScoreCell({ score, C }) {
   const rounded = Math.round(score * 10) / 10;
   if (!rounded) return null;
-  return <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 26, height: 22, padding: "0 7px", background: C.headBg, color: C.textPrimary, border: `1px solid ${C.cardBorder}`, borderRadius: 999, fontSize: 12, fontWeight: 500 }}>{rounded}</span>;
+  return <span style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary, opacity: 0.8 }}>{rounded}</span>;
 }
 
 function NumInput({ val, onChange, C, min = 0, max = 10, step = 1, width = 42 }) {
@@ -173,6 +175,8 @@ export default function App({ publicItems } = {}) {
   const [adding, setAdding] = useState(null);
   const [newItem, setNewItem] = useState({});
   const [collapsed, setCollapsed] = useState({});
+  const [openDesc, setOpenDesc] = useState({});
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [overInfo, setOverInfo] = useState({ id: null, group: null });
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -267,6 +271,17 @@ export default function App({ publicItems } = {}) {
 
   const update = (id, f, v) => setItems(p => p.map(i => i.id === id ? { ...i, [f]: v } : i));
   const remove = id => setItems(p => p.filter(i => i.id !== id));
+
+  const toggleDesc = id => setOpenDesc(o => ({ ...o, [id]: !o[id] }));
+  const anyDesc = items.some(i => i.description && String(i.description).trim());
+  function toggleAllDesc() {
+    const next = !bulkOpen;
+    setBulkOpen(next);
+    if (!next) { setOpenDesc({}); return; }
+    const all = {};
+    items.forEach(i => { if (i.description && String(i.description).trim()) all[i.id] = true; });
+    setOpenDesc(all);
+  }
 
   function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", description: "", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group }); }
   function commitAdd() {
@@ -387,8 +402,8 @@ export default function App({ publicItems } = {}) {
     area: "clamp(74px, 9vw, 110px)",
     version: "clamp(46px, 6vw, 80px)",
     score: "clamp(46px, 6vw, 70px)",
-    num: "clamp(40px, 5vw, 70px)",
-    conf: "clamp(46px, 6vw, 80px)",
+    num: "clamp(64px, 6vw, 92px)",
+    conf: "clamp(64px, 6vw, 92px)",
     link: "clamp(52px, 6vw, 70px)",
     del: 72,
   };
@@ -402,13 +417,13 @@ export default function App({ publicItems } = {}) {
   const cellBase = { fontSize: 13, padding: "11px 12px", verticalAlign: "middle", color: C.textPrimary };
   const inputStyle = { width: "100%", fontSize: 13, border: `1px solid ${C.cardBorder}`, borderRadius: 6, padding: "4px 7px", background: C.inputBg, color: C.textPrimary, boxSizing: "border-box" };
 
-  function renderEditRow(item, isNew) {
+  function renderEditRow(item, isNew, showGrip) {
     const it = isNew ? newItem : item;
     const set = isNew ? (f, v) => setNewItem(n => ({ ...n, [f]: v })) : (f, v) => update(item.id, f, v);
     const ec = { ...cellBase, verticalAlign: "top" }; // top-align edit cells against the tall description
     return (
       <>
-        <td style={{ ...ec, color: C.textTertiary, textAlign: "center" }}><Icon name="grip" size={14} /></td>
+        {showGrip && <td style={{ ...ec, color: C.textTertiary, textAlign: "center" }}><Icon name="grip" size={14} /></td>}
         <td style={ec}>
           <input autoFocus={isNew} placeholder="Initiative…" value={it.title} onChange={e => set("title", e.target.value)} style={inputStyle} />
           <AutoTextarea val={it.description || ""} onChange={v => set("description", v)} C={C} placeholder="Description…" />
@@ -419,8 +434,7 @@ export default function App({ publicItems } = {}) {
         <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.ease} onChange={v => set("ease", v)} C={C} min={0} max={10} step={1} /></td>
         <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.impact} onChange={v => set("impact", v)} C={C} min={0} max={10} step={1} /></td>
         <td style={{ ...ec, textAlign: "right" }}><ConfInput val={it.confidence} onChange={v => set("confidence", v)} C={C} /></td>
-        <td style={ec}><input placeholder="URL…" value={it.link} onChange={e => set("link", e.target.value)} style={{ ...inputStyle, fontSize: 12 }} /></td>
-        <td style={ec} />
+        <td style={ec} colSpan={2}><input placeholder="URL…" value={it.link} onChange={e => set("link", e.target.value)} style={{ ...inputStyle, fontSize: 12 }} /></td>
         <td style={{ ...ec, textAlign: "center", padding: "11px 18px 11px 12px" }}>{!isNew && (
           <button onClick={() => setConfirmDelete(item.id)} title="Delete initiative" aria-label="Delete initiative"
             style={{ background: mode === "dark" ? "rgba(229,72,77,0.16)" : "rgba(229,72,77,0.1)", border: "1px solid rgba(229,72,77,0.55)", borderRadius: 7, cursor: "pointer", color: "#e5484d", padding: "5px 8px", display: "inline-flex", alignItems: "center" }}>
@@ -431,27 +445,38 @@ export default function App({ publicItems } = {}) {
     );
   }
 
-  function renderDisplayRow(item) {
+  function renderDisplayRow(item, showGrip) {
+    const dc = { ...cellBase, verticalAlign: "top" };
+    const hasDesc = item.description && String(item.description).trim() !== "";
+    const open = !!openDesc[item.id];
     return (
       <>
-        <td style={{ ...cellBase, color: C.textTertiary, textAlign: "center" }}><Icon name="grip" size={14} /></td>
-        <td style={cellBase} title={item.description && String(item.description).trim() ? item.description : undefined}>
+        {showGrip && <td style={{ ...dc, color: C.textTertiary, textAlign: "center" }}><Icon name="grip" size={14} /></td>}
+        <td style={dc}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
-            <div style={{ flex: 1, minWidth: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: "1.35", overflowWrap: "anywhere" }}>{item.title}</div>
-            {item.description && String(item.description).trim() && (
-              <span style={{ color: C.textTertiary, display: "inline-flex", flexShrink: 0, marginTop: 1 }}><Icon name="info" size={14} /></span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: "1.35", overflowWrap: "anywhere" }}>{item.title}</div>
+              {hasDesc && open && (
+                <div style={{ fontSize: 12, opacity: 0.4, marginTop: 4, lineHeight: 1.4, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{item.description}</div>
+              )}
+            </div>
+            {hasDesc && (
+              <button onClick={e => { e.stopPropagation(); toggleDesc(item.id); }} title={open ? "Hide description" : "Show description"} aria-label={open ? "Hide description" : "Show description"}
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.textTertiary, display: "inline-flex", flexShrink: 0, marginTop: 1 }}>
+                <Icon name={open ? "chevron-up" : "chevron-down"} size={14} />
+              </button>
             )}
           </div>
         </td>
-        <td style={cellBase}>{item.area ? (() => { const a = areaStyle(item.area, mode); return <span style={{ background: a.bg, color: a.color, fontSize: 12, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{item.area}</span>; })() : null}</td>
-        <td style={{ ...cellBase, color: C.textSecondary }}>{item.version}</td>
-        <td style={{ ...cellBase, textAlign: "right" }}><ScoreCell score={score(item)} C={C} /></td>
-        <td style={{ ...cellBase, textAlign: "right", color: item.ease ? C.textPrimary : C.textTertiary }}>{item.ease || "–"}</td>
-        <td style={{ ...cellBase, textAlign: "right", color: item.impact ? C.textPrimary : C.textTertiary }}>{item.impact || "–"}</td>
-        <td style={{ ...cellBase, textAlign: "right", color: item.confidence === "" ? C.textTertiary : C.textPrimary }}>{item.confidence === "" ? "–" : Number(item.confidence).toFixed(2)}</td>
-        <td style={cellBase}>{item.link ? <a href={item.link} style={{ fontSize: 12, color: C.accent, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3 }}>{/figma/i.test(item.link) ? "Figma" : item.link.replace(/^https?:\/\//, "").split("/")[0]}</a> : null}</td>
-        <td style={cellBase} />
-        <td style={cellBase} />
+        <td style={dc}>{item.area ? (() => { const a = areaStyle(item.area, mode); return <span style={{ background: a.bg, color: a.color, fontSize: 12, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{item.area}</span>; })() : null}</td>
+        <td style={dc}>{item.version ? (() => { const a = areaStyle(item.version, mode); return <span style={{ background: a.bg, color: a.color, fontSize: 12, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{item.version}</span>; })() : null}</td>
+        <td style={{ ...dc, textAlign: "right" }}><ScoreCell score={score(item)} C={C} /></td>
+        <td style={{ ...dc, textAlign: "right", color: item.ease ? C.textPrimary : C.textTertiary }}>{item.ease || "–"}</td>
+        <td style={{ ...dc, textAlign: "right", color: item.impact ? C.textPrimary : C.textTertiary }}>{item.impact || "–"}</td>
+        <td style={{ ...dc, textAlign: "right", color: item.confidence === "" ? C.textTertiary : C.textPrimary }}>{item.confidence === "" ? "–" : Number(item.confidence).toFixed(2)}</td>
+        <td style={dc}>{item.link ? <a href={item.link} style={{ fontSize: 13, color: C.accent, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3 }}>{/figma/i.test(item.link) ? "Figma" : item.link.replace(/^https?:\/\//, "").split("/")[0]}</a> : null}</td>
+        <td style={dc} />
+        <td style={dc} />
       </>
     );
   }
@@ -476,11 +501,11 @@ export default function App({ publicItems } = {}) {
             <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", tableLayout: "fixed" }}>
               <colgroup>
-                <col style={{ width: colW.drag }} /><col style={{ width: colW.init }} /><col style={{ width: colW.area }} /><col style={{ width: colW.version }} /><col style={{ width: colW.score }} /><col style={{ width: colW.num }} /><col style={{ width: colW.num }} /><col style={{ width: colW.conf }} /><col style={{ width: colW.link }} /><col /><col style={{ width: colW.del }} />
+                {allowDrag && <col style={{ width: colW.drag }} />}<col style={{ width: colW.init }} /><col style={{ width: colW.area }} /><col style={{ width: colW.version }} /><col style={{ width: colW.score }} /><col style={{ width: colW.num }} /><col style={{ width: colW.num }} /><col style={{ width: colW.conf }} /><col style={{ width: colW.link }} /><col /><col style={{ width: colW.del }} />
               </colgroup>
               <thead>
                 <tr style={{ background: C.headBg, borderBottom: `1px solid ${C.cardBorder}` }}>
-                  {headCell("", colW.drag)}
+                  {allowDrag && headCell("", colW.drag)}
                   {headCell("Initiative", colW.init)}
                   {headCell("Area", colW.area)}
                   {headCell("Version", colW.version)}
@@ -514,12 +539,12 @@ export default function App({ publicItems } = {}) {
                         cursor: editing ? "default" : (allowDrag ? "grab" : "default"),
                         opacity: dragId === item.id ? 0.5 : 1,
                       }}>
-                      {editing ? renderEditRow(item, false) : renderDisplayRow(item)}
+                      {editing ? renderEditRow(item, false, allowDrag) : renderDisplayRow(item, allowDrag)}
                     </tr>
                   );
                 })}
                 {allowDrag && adding === label && (
-                  <tr ref={editRowRef} onKeyDown={e => onEditKeyDown(e, true)} style={{ background: C.headBg, borderTop: `1px solid ${C.cardBorder}` }}>{renderEditRow(null, true)}</tr>
+                  <tr ref={editRowRef} onKeyDown={e => onEditKeyDown(e, true)} style={{ background: C.headBg, borderTop: `1px solid ${C.cardBorder}` }}>{renderEditRow(null, true, allowDrag)}</tr>
                 )}
                 {allowDrag && (
                   <tr>
@@ -556,14 +581,21 @@ export default function App({ publicItems } = {}) {
     <div ref={rootRef} style={{ background: C.pageBg, minHeight: "100vh", height: isFs ? "100vh" : undefined, overflowY: isFs ? "auto" : undefined, padding: "1.25rem 0.5rem", fontFamily: "var(--font-sans)" }}>
       <h2 className="sr-only">Product roadmap planner</h2>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem", padding: "0 4px", gap: 12, flexWrap: "wrap" }}>
-        {isPublic
-          ? <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px" }}>Roadmap — Versions</div>
-          : (
-            <div style={{ display: "inline-flex", gap: 2, background: C.tabBg, border: `1px solid ${C.cardBorder}`, borderRadius: 9, padding: 3 }}>
-              {tabBtn("main", "Main")}
-              {tabBtn("versions", "Versions")}
-            </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {isPublic
+            ? <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px" }}>Roadmap — Versions</div>
+            : (
+              <div style={{ display: "inline-flex", gap: 2, background: C.tabBg, border: `1px solid ${C.cardBorder}`, borderRadius: 9, padding: 3 }}>
+                {tabBtn("main", "Main")}
+                {tabBtn("versions", "Versions")}
+              </div>
+            )}
+          {anyDesc && (
+            <button onClick={toggleAllDesc} style={{ ...toolBtn, padding: "5px 9px" }} title="Open/close all descriptions" aria-label="Open/close all descriptions">
+              <Icon name="unfold" size={16} />
+            </button>
           )}
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {canEdit && (
             <>

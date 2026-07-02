@@ -177,6 +177,8 @@ export default function App({ publicItems } = {}) {
   const [collapsed, setCollapsed] = useState({});
   const [openDesc, setOpenDesc] = useState({});
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [crumb, setCrumb] = useState({ section: null, group: null });
+  const [topOffset, setTopOffset] = useState(0);
   const [dragId, setDragId] = useState(null);
   const [overInfo, setOverInfo] = useState({ id: null, group: null });
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -190,6 +192,7 @@ export default function App({ publicItems } = {}) {
   const editRowRef = useRef(null);
   const fileInputRef = useRef(null);
   const rootRef = useRef(null);
+  const toolbarRef = useRef(null);
   const saveTimer = useRef(null);
 
   // Load the doc only for the signed-in owner. Reads are locked to the owner by
@@ -242,6 +245,40 @@ export default function App({ publicItems } = {}) {
       document.removeEventListener("webkitfullscreenchange", onFs);
     };
   }, []);
+
+  // Track which section/group header is currently scrolled up under the sticky
+  // toolbar, to build the breadcrumb. Also measures the toolbar height so the
+  // table headers can stick just below it.
+  useEffect(() => {
+    let ticking = false;
+    function update() {
+      const bar = toolbarRef.current, root = rootRef.current;
+      if (!bar || !root) return;
+      const rect = bar.getBoundingClientRect();
+      const h = Math.round(rect.height);
+      setTopOffset(prev => (prev === h ? prev : h));
+      let section = null, group = null;
+      root.querySelectorAll("[data-crumb]").forEach(n => {
+        if (n.getBoundingClientRect().top < rect.bottom + 1) {
+          if (n.getAttribute("data-crumb-level") === "section") { section = n.getAttribute("data-crumb"); group = null; }
+          else { group = n.getAttribute("data-crumb"); }
+        }
+      });
+      setCrumb(prev => (prev.section === section && prev.group === group) ? prev : { section, group });
+    }
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => { update(); ticking = false; });
+    }
+    update();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [items, view, isPublic, collapsed, openDesc]);
 
   const C = PALETTES[mode];
   const canEdit = !isPublic && !!session && session.user && session.user.email === OWNER_EMAIL;
@@ -409,8 +446,8 @@ export default function App({ publicItems } = {}) {
     del: 72,
   };
 
-  const headCell = (label, w, right, tip) => (
-    <th style={{ width: w, fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.04em", color: C.textTertiary, padding: "11px 8px", textAlign: right ? "right" : "left", whiteSpace: "nowrap", userSelect: "none", overflow: "hidden", textOverflow: "ellipsis" }}>
+  const headCell = (label, w, right, tip, round) => (
+    <th style={{ width: w, fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.04em", color: C.textTertiary, padding: "11px 8px", textAlign: right ? "right" : "left", whiteSpace: "nowrap", userSelect: "none", overflow: "hidden", textOverflow: "ellipsis", position: "sticky", top: topOffset, zIndex: 10, background: C.headBg, borderBottom: `1px solid ${C.cardBorder}`, ...(round === "left" ? { borderTopLeftRadius: 12 } : round === "right" ? { borderTopRightRadius: 12 } : {}) }}>
       {label}{tip && <InfoIcon tip={tip} color={C.textTertiary} />}
     </th>
   );
@@ -488,7 +525,7 @@ export default function App({ publicItems } = {}) {
     const isGroupDropTarget = allowDrag && overInfo.group === label && overInfo.id === null;
     return (
       <div key={collapseKey} style={{ marginBottom: "1.75rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px", cursor: "pointer" }}
+        <div data-crumb={label} data-crumb-level="group" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px", cursor: "pointer" }}
           onClick={() => setCollapsed(c => ({ ...c, [collapseKey]: !c[collapseKey] }))}>
           <span style={{ color: C.accent, display: "inline-flex" }}><Icon name={isCollapsed ? "chevron-right" : "chevron-down"} size={15} /></span>
           <span style={{ fontWeight: 500, fontSize: 15, color: C.accent }}>{label}</span>
@@ -498,16 +535,15 @@ export default function App({ publicItems } = {}) {
           <div
             onDragOver={allowDrag ? (e => { e.preventDefault(); setOverInfo({ id: null, group: label }); }) : undefined}
             onDrop={allowDrag ? (() => handleDrop(label, null)) : undefined}
-            style={{ background: C.cardBg, border: `1px solid ${isGroupDropTarget ? C.accent : C.cardBorder}`, borderRadius: 12, overflow: "hidden", boxShadow: C.shadow }}>
-            <div style={{ overflowX: "auto" }}>
+            style={{ background: C.cardBg, border: `1px solid ${isGroupDropTarget ? C.accent : C.cardBorder}`, borderRadius: 12, boxShadow: C.shadow }}>
             <table style={{ width: "100%", minWidth: 600, borderCollapse: "collapse", tableLayout: "fixed" }}>
               <colgroup>
                 {allowDrag && <col style={{ width: colW.drag }} />}<col style={{ width: colW.init }} /><col style={{ width: colW.area }} /><col style={{ width: colW.version }} /><col style={{ width: colW.score }} /><col style={{ width: colW.num }} /><col style={{ width: colW.num }} /><col style={{ width: colW.conf }} /><col style={{ width: colW.link }} /><col /><col style={{ width: colW.del }} />
               </colgroup>
               <thead>
                 <tr style={{ background: C.headBg, borderBottom: `1px solid ${C.cardBorder}` }}>
-                  {allowDrag && headCell("", colW.drag)}
-                  {headCell("Initiative", colW.init)}
+                  {allowDrag && headCell("", colW.drag, false, undefined, "left")}
+                  {headCell("Initiative", colW.init, false, undefined, allowDrag ? undefined : "left")}
                   {headCell("Area", colW.area)}
                   {headCell("Version", colW.version)}
                   {headCell("Score", colW.score, true)}
@@ -516,7 +552,7 @@ export default function App({ publicItems } = {}) {
                   {headCell("Conf", colW.conf, true, "Confidence multiplier (0–1)")}
                   {headCell("Link", colW.link)}
                   {headCell("")}
-                  {headCell("", colW.del)}
+                  {headCell("", colW.del, false, undefined, "right")}
                 </tr>
               </thead>
               <tbody>
@@ -558,7 +594,6 @@ export default function App({ publicItems } = {}) {
                 )}
               </tbody>
             </table>
-            </div>
           </div>
         )}
       </div>
@@ -577,20 +612,26 @@ export default function App({ publicItems } = {}) {
   };
 
   const toolBtn = { background: "none", border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", color: C.textSecondary, fontSize: 13, padding: "5px 10px", display: "flex", alignItems: "center", gap: 6 };
+  const sectionBar = { background: C.headBg, color: C.textPrimary, fontSize: 15, fontWeight: 500, padding: "8px 12px", borderRadius: 8, marginBottom: "1rem" };
 
   return (
     <div ref={rootRef} style={{ background: C.pageBg, minHeight: "100vh", height: isFs ? "100vh" : undefined, overflowY: isFs ? "auto" : undefined, padding: "1.25rem 0.5rem", fontFamily: "var(--font-sans)" }}>
       <h2 className="sr-only">Product roadmap planner</h2>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem", padding: "0 4px", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div ref={toolbarRef} style={{ position: "sticky", top: 0, zIndex: 20, background: C.pageBg, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem", padding: "0.75rem 4px", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           {isPublic
-            ? <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px" }}>Roadmap — Versions</div>
+            ? <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px" }}>Roadmap</div>
             : (
               <div style={{ display: "inline-flex", gap: 2, background: C.tabBg, border: `1px solid ${C.cardBorder}`, borderRadius: 9, padding: 3 }}>
                 {tabBtn("main", "Main")}
                 {tabBtn("versions", "Versions")}
               </div>
             )}
+          {(isPublic ? crumb.section : crumb.group) && (
+            <span style={{ fontSize: 14, fontWeight: 500, color: C.textSecondary, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+              {isPublic ? ` / ${crumb.section}${crumb.group ? ` / ${crumb.group}` : ""}` : crumb.group}
+            </span>
+          )}
           {anyDesc && (
             <button onClick={toggleAllDesc} style={{ ...toolBtn, padding: "5px 9px" }} title="Open/close all descriptions" aria-label="Open/close all descriptions">
               <Icon name="unfold" size={16} />
@@ -626,6 +667,8 @@ export default function App({ publicItems } = {}) {
         GroupCard({ label: group, rows: items.filter(i => (i.group || "").trim() === group), allowDrag: canEdit })
       )}
 
+      {isPublic && versions.length > 0 && <div data-crumb="Versions" data-crumb-level="section" style={sectionBar}>Versions</div>}
+
       {view === "versions" && (
         versions.length === 0
           ? (!isPublic ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No initiatives have a version set yet. Add a version to an item in the Main view to see it grouped here.</div> : null)
@@ -641,7 +684,7 @@ export default function App({ publicItems } = {}) {
         if (!groups.length) return null;
         return (
           <>
-            <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px", marginTop: "0.5rem", marginBottom: "1rem" }}>Unassigned initiatives</div>
+            <div data-crumb="Unassigned initiatives" data-crumb-level="section" style={sectionBar}>Unassigned initiatives</div>
             {groups.map(group =>
               GroupCard({ label: group, rows: unassigned.filter(i => (i.group || "").trim() === group), allowDrag: false })
             )}

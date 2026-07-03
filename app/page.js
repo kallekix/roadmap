@@ -11,6 +11,26 @@ const GROUPS = ["Next", "Later", "Future"];
 // constant just drives the UI so non-editors don't see dead controls.
 const OWNER_EMAIL = "kalle@paulsson.net";
 
+// Confidence is a derived value: the sum of the weights of the checked evidence
+// factors, capped at 10. Stored per item as item.evidence = { key: bool, ... }.
+const EVIDENCE = [
+  { key: "self", label: "Self conviction", weight: 0.01, intro: "Supported by", points: ["Opinion of originator of idea", "Triage team's opinions", "Quick guesstimates"] },
+  { key: "thematic", label: "Thematic support", weight: 0.05, intro: "Aligns with", points: ["Vision/mission/strategy", "Current buzzwords", "Outside research", "Market trends"] },
+  { key: "internal", label: "Internal reviews", weight: 0.10, intro: "Supported by opinions/logic of", points: ["The team", "Management", "Stakeholder", "Experts"] },
+  { key: "estimates", label: "Estimates and plans", weight: 0.30, intro: "Supported by", points: ["Back of the envelope calculations", "Eng / UX evaluation", "Project timeline", "Business model canvas/plan"] },
+  { key: "anecdotal", label: "Anecdotal evidence", weight: 0.50, intro: "Supported by", points: ["A few product data points", "A Sales request", "1-3 interested customers", "1-2 competitors have it"] },
+  { key: "market", label: "Market data", weight: 1.00, intro: "Supported by", points: ["Customer surveys", "Smoke tests", "All/most competitors have it"] },
+  { key: "customer", label: "Customer evidence", weight: 2.00, intro: "Supported by", points: ["Lots of product data", "Top user request", "Interviews with 20+ users", "Usability study", "Wizard of Oz/Concierge test", "Dogfood"] },
+  { key: "test", label: "Test results", weight: 5.00, intro: "Supported by", points: ["Longitudinal user study", "Alpha/beta", "Early-adopter program", "A/B experiments"] },
+  { key: "launch", label: "Launch data", weight: 7.00, intro: "Supported by", points: ["% experiment", "Holdback experiment", "Launch data"] },
+];
+
+function confidenceOf(item) {
+  const ev = (item && item.evidence) || {};
+  const sum = EVIDENCE.reduce((s, f) => s + (ev[f.key] ? f.weight : 0), 0);
+  return Math.min(10, Math.round(sum * 100) / 100);
+}
+
 const DEFAULT_ITEMS = [
   { id: 1, title: "Better data fetching", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group: "Next" },
   { id: 2, title: "Better navigation", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group: "Next" },
@@ -179,6 +199,7 @@ export default function App({ publicItems } = {}) {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [crumb, setCrumb] = useState({ section: null, group: null });
   const [topOffset, setTopOffset] = useState(0);
+  const [evidenceFor, setEvidenceFor] = useState(null); // item id, "new", or null
   const [dragId, setDragId] = useState(null);
   const [overInfo, setOverInfo] = useState({ id: null, group: null });
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -227,14 +248,14 @@ export default function App({ publicItems } = {}) {
   useEffect(() => {
     if (editId == null && adding == null) return;
     function onDocMouseDown(e) {
-      if (confirmDelete != null) return;
+      if (confirmDelete != null || evidenceFor != null) return;
       if (editRowRef.current && !editRowRef.current.contains(e.target)) {
         if (adding != null) commitAdd(); else setEditId(null);
       }
     }
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [editId, adding, newItem, confirmDelete]);
+  }, [editId, adding, newItem, confirmDelete, evidenceFor]);
 
   useEffect(() => {
     const onFs = () => setIsFs(!!(document.fullscreenElement || document.webkitFullscreenElement));
@@ -303,7 +324,7 @@ export default function App({ publicItems } = {}) {
 
   if (!items) return <div style={{ padding: "2rem", fontSize: 13, color: C.textSecondary }}>Loading…</div>;
 
-  const score = i => i.ease * i.impact * (Number(i.confidence) || 0);
+  const score = i => i.ease * i.impact * confidenceOf(i);
   const nextId = items.length ? Math.max(...items.map(i => i.id)) + 1 : 1;
 
   const update = (id, f, v) => setItems(p => p.map(i => i.id === id ? { ...i, [f]: v } : i));
@@ -320,7 +341,7 @@ export default function App({ publicItems } = {}) {
     setOpenDesc(all);
   }
 
-  function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", description: "", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group }); }
+  function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", description: "", area: "", version: "", ease: 0, impact: 0, evidence: {}, link: "", group }); }
   function commitAdd() {
     if (!newItem.title.trim()) { setAdding(null); return; }
     setItems(p => [...p, { ...newItem, id: nextId, title: newItem.title.trim() }]);
@@ -367,7 +388,6 @@ export default function App({ publicItems } = {}) {
         const cleanLink = str => String(str || "").replace(/^\s*figma\s*[-–—:]\s*/i, "").trim();
         const cell = (row, idx) => idx >= 0 && idx < row.length ? String(row[idx]).trim() : "";
         const parsed = data.slice(1).map((row, idx) => {
-          const conf = cell(row, ci.confidence);
           return {
             id: idx + 1,
             title: cell(row, ci.title),
@@ -376,7 +396,7 @@ export default function App({ publicItems } = {}) {
             version: cell(row, ci.version),
             ease: Number(cell(row, ci.ease)) || 0,
             impact: Number(cell(row, ci.impact)) || 0,
-            confidence: conf === "" ? "" : (Number(conf) || 0),
+            evidence: {}, // Confidence is derived from evidence; CSV import starts empty
             link: cleanLink(cell(row, ci.link)),
             group: cell(row, ci.group) || "Next",
           };
@@ -396,7 +416,7 @@ export default function App({ publicItems } = {}) {
       i.title, i.description || "", i.area, i.version,
       Math.round(score(i) * 10) / 10,
       i.ease, i.impact,
-      i.confidence === "" ? "" : i.confidence,
+      confidenceOf(i),
       i.link, i.group,
     ].map(esc).join(","));
     const csv = "\uFEFF" + [headers.join(","), ...lines].join("\r\n");
@@ -468,10 +488,12 @@ export default function App({ publicItems } = {}) {
         </td>
         <td style={ec}><input placeholder="Area" value={it.area} onChange={e => set("area", e.target.value)} style={inputStyle} /></td>
         <td style={ec}><input placeholder="2.0" value={it.version} onChange={e => set("version", e.target.value)} style={inputStyle} /></td>
-        <td style={{ ...ec, textAlign: "right" }}><ScoreCell score={it.ease * it.impact * (Number(it.confidence) || 0)} C={C} /></td>
+        <td style={{ ...ec, textAlign: "right" }}><ScoreCell score={it.ease * it.impact * confidenceOf(it)} C={C} /></td>
         <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.ease} onChange={v => set("ease", v)} C={C} min={0} max={10} step={1} /></td>
         <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.impact} onChange={v => set("impact", v)} C={C} min={0} max={10} step={1} /></td>
-        <td style={{ ...ec, textAlign: "right" }}><ConfInput val={it.confidence} onChange={v => set("confidence", v)} C={C} /></td>
+        <td style={{ ...ec, textAlign: "right" }}>
+          <button onClick={() => setEvidenceFor(isNew ? "new" : item.id)} title="Edit confidence evidence" style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.accent, fontSize: 13, fontFamily: "inherit" }}>{confidenceOf(it).toFixed(2)}</button>
+        </td>
         <td style={ec} colSpan={2}><input placeholder="URL…" value={it.link} onChange={e => set("link", e.target.value)} style={{ ...inputStyle, fontSize: 12 }} /></td>
         <td style={{ ...ec, textAlign: "center", padding: "11px 18px 11px 12px" }}>{!isNew && (
           <button onClick={() => setConfirmDelete(item.id)} title="Delete initiative" aria-label="Delete initiative"
@@ -511,7 +533,9 @@ export default function App({ publicItems } = {}) {
         <td style={{ ...dc, textAlign: "right" }}><ScoreCell score={score(item)} C={C} /></td>
         <td style={{ ...dc, textAlign: "right", color: item.ease ? C.textPrimary : C.textTertiary }}>{item.ease || "–"}</td>
         <td style={{ ...dc, textAlign: "right", color: item.impact ? C.textPrimary : C.textTertiary }}>{item.impact || "–"}</td>
-        <td style={{ ...dc, textAlign: "right", color: item.confidence === "" ? C.textTertiary : C.textPrimary }}>{item.confidence === "" ? "–" : Number(item.confidence).toFixed(2)}</td>
+        <td style={{ ...dc, textAlign: "right" }}>
+          <button onClick={e => { e.stopPropagation(); setEvidenceFor(item.id); }} title="Confidence evidence" style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.accent, fontSize: 13, fontFamily: "inherit" }}>{confidenceOf(item).toFixed(2)}</button>
+        </td>
         <td style={dc}>{item.link ? <a href={item.link} style={{ fontSize: 13, color: C.accent, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3 }}>{/figma/i.test(item.link) ? "Figma" : item.link.replace(/^https?:\/\//, "").split("/")[0]}</a> : null}</td>
         <td style={dc} />
         <td style={dc} />
@@ -549,7 +573,7 @@ export default function App({ publicItems } = {}) {
                   {headCell("Score", colW.score, true)}
                   {headCell("Ease", colW.num, true, "How easy to build (1–10)")}
                   {headCell("Impact", colW.num, true, "Expected impact (1–10)")}
-                  {headCell("Conf", colW.conf, true, "Confidence multiplier (0–1)")}
+                  {headCell("Conf", colW.conf, true, "Confidence multiplier (0–10), from evidence checkboxes")}
                   {headCell("Link", colW.link)}
                   {headCell("")}
                   {headCell("", colW.del, false, undefined, "right")}
@@ -708,6 +732,50 @@ export default function App({ publicItems } = {}) {
                   style={{ background: "none", color: C.textSecondary, border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", fontSize: 13, padding: "6px 14px" }}>Cancel</button>
                 <button onClick={() => { remove(confirmDelete); setConfirmDelete(null); setEditId(null); }}
                   style={{ background: "#e5484d", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 500, padding: "6px 14px" }}>Delete</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {evidenceFor != null && (() => {
+        const isNewT = evidenceFor === "new";
+        const target = isNewT ? newItem : items.find(i => i.id === evidenceFor);
+        if (!target) return null;
+        const ev = target.evidence || {};
+        const setEv = (key, checked) => {
+          if (!canEdit) return;
+          if (isNewT) setNewItem(n => ({ ...n, evidence: { ...(n.evidence || {}), [key]: checked } }));
+          else setItems(p => p.map(i => i.id === evidenceFor ? { ...i, evidence: { ...(i.evidence || {}), [key]: checked } } : i));
+        };
+        return (
+          <div onMouseDown={() => setEvidenceFor(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 12 }}>
+            <div onMouseDown={e => e.stopPropagation()}
+              style={{ background: C.cardBg, border: `1px solid ${C.cardBorder}`, borderRadius: 12, maxWidth: 1600, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,0.4)", overflow: "hidden" }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: C.textPrimary, padding: "14px 18px", borderBottom: `1px solid ${C.cardBorder}` }}>Evidence in support of impact and ease estimates</div>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, padding: "14px 18px 10px" }}>
+                <span style={{ fontSize: 15, fontWeight: 600, color: C.textPrimary }}>{target.title || "New initiative"}</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: C.textPrimary }}>{confidenceOf(target).toFixed(2)}</span>
+              </div>
+              <div style={{ display: "grid", gridAutoFlow: "column", gridTemplateColumns: `repeat(${EVIDENCE.length}, minmax(96px, 1fr))`, gridTemplateRows: "auto auto 1fr auto", columnGap: 10, rowGap: 8, padding: "6px 18px 16px", overflowX: "auto" }}>
+                {EVIDENCE.flatMap(f => [
+                  <div key={f.key + "-t"} style={{ fontSize: 12, fontWeight: 500, color: C.textPrimary, lineHeight: 1.3, textAlign: "left" }}>{f.label}</div>,
+                  <div key={f.key + "-w"} style={{ fontSize: 12, color: C.textSecondary, textAlign: "left" }}>{f.weight.toFixed(2)}</div>,
+                  <div key={f.key + "-d"} style={{ fontSize: 11, opacity: 0.4, color: C.textPrimary, lineHeight: 1.35, alignSelf: "start" }}>
+                    <div style={{ marginBottom: 3 }}>{f.intro.replace(/\s*\/\s*/g, " / ")}</div>
+                    {f.points.map((p, i) => <div key={i}>– {p.replace(/\s*\/\s*/g, " / ")}</div>)}
+                  </div>,
+                  <div key={f.key + "-c"} style={{ display: "flex", justifyContent: "flex-start", alignItems: "flex-start", paddingTop: 4 }}>
+                    <input type="checkbox" checked={!!ev[f.key]} disabled={!canEdit}
+                      onChange={e => setEv(f.key, e.target.checked)}
+                      style={{ width: 17, height: 17, accentColor: C.accent, cursor: canEdit ? "pointer" : "not-allowed" }} />
+                  </div>,
+                ])}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", padding: "10px 18px 16px" }}>
+                <button onClick={() => setEvidenceFor(null)}
+                  style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 500, padding: "7px 16px" }}>Close</button>
               </div>
             </div>
           </div>

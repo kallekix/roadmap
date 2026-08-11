@@ -755,7 +755,10 @@ export default function App({ publicItems } = {}) {
               style={{ background: C.cardBg, border: `1px solid ${C.cardBorder}`, borderRadius: 12, maxWidth: 1600, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,0.4)", overflow: "hidden" }}>
               <div style={{ fontSize: 15, fontWeight: 600, color: C.textPrimary, padding: "14px 18px", borderBottom: `1px solid ${C.cardBorder}` }}>Evidence in support of impact and ease estimates</div>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, padding: "14px 18px 10px" }}>
-                <span style={{ fontSize: 15, fontWeight: 600, color: C.textPrimary }}>{target.title || "New initiative"}</span>
+                <span style={{ fontSize: 15, color: C.textPrimary }}>
+                  <span style={{ fontWeight: 600 }}>{target.title || "New initiative"}</span>
+                  <span style={{ fontWeight: 400, color: C.textSecondary, marginLeft: 10 }}>Ease {target.ease || 0} / Impact {target.impact || 0}</span>
+                </span>
                 <span style={{ fontSize: 16, fontWeight: 700, color: C.textPrimary }}>{confidenceOf(target).toFixed(2)}</span>
               </div>
               <div style={{ display: "grid", gridAutoFlow: "column", gridTemplateColumns: `repeat(${EVIDENCE.length}, minmax(96px, 1fr))`, gridTemplateRows: "auto auto 1fr auto", columnGap: 10, rowGap: 8, padding: "6px 18px 16px", overflowX: "auto" }}>

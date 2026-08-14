@@ -31,17 +31,6 @@ function confidenceOf(item) {
   return Math.min(10, Math.round(sum * 100) / 100);
 }
 
-const DEFAULT_ITEMS = [
-  { id: 1, title: "Better data fetching", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group: "Next" },
-  { id: 2, title: "Better navigation", area: "", version: "", ease: 0, impact: 0, confidence: "", link: "", group: "Next" },
-  { id: 3, title: "Chat view", area: "Private", version: "2.1", ease: 5, impact: 7, confidence: 0.15, link: "https://figma.com", group: "Next" },
-  { id: 4, title: "Highlight immediate money transfers", area: "Private", version: "2.1", ease: 9, impact: 3, confidence: 0.1, link: "https://figma.com", group: "Next" },
-  { id: 5, title: "Better control of my invites", area: "Private", version: "2.1", ease: 6, impact: 6, confidence: 0.8, link: "https://figma.com", group: "Next" },
-  { id: 6, title: "Group money pooling", area: "Private", version: "2.2", ease: 4, impact: 10, confidence: 0.4, link: "", group: "Later" },
-  { id: 7, title: "Recurring payments", area: "Private", version: "2.3", ease: 6, impact: 8, confidence: 0.6, link: "", group: "Later" },
-  { id: 8, title: "Dark mode", area: "Private", version: "2.3", ease: 8, impact: 4, confidence: 1.0, link: "", group: "Future" },
-];
-
 const PALETTES = {
   dark: {
     pageBg: "#15171f", cardBg: "#1f2230", cardBorder: "#363a4a", headBg: "#272b3a", rowBorder: "#2e3242",
@@ -151,34 +140,41 @@ function AutoTextarea({ val, onChange, C, placeholder }) {
   );
 }
 
-// --- Persistence: the whole items array is stored as ONE JSON document in
-// Supabase (table `roadmap`, row id = 'main'), shared by everyone. This mirrors
-// the original artifact, which saved the array as a single blob.
-const DOC_ID = "main";
+// --- Persistence: one row per initiative in Supabase table `initiatives`,
+// ordered by a float `position` (fractional-rank so a reorder is a single-row
+// write). Per-row writes mean two tabs editing different items no longer clobber
+// each other's whole document.
+const IMPOSSIBLE_ID = "00000000-0000-0000-0000-000000000000";
+
+// Map an in-memory item to a DB row (column set of the `initiatives` table).
+function toDbRow(it) {
+  return {
+    id: it.id,
+    title: it.title || "",
+    description: it.description || "",
+    area: it.area || "",
+    version: it.version || "",
+    ease: it.ease || 0,
+    impact: it.impact || 0,
+    evidence: it.evidence || {},
+    link: it.link || "",
+    group: it.group || "Next",
+    position: it.position ?? 0,
+    updated_at: new Date().toISOString(),
+  };
+}
 
 async function loadData() {
   try {
     const { data, error } = await supabase
-      .from("roadmap")
-      .select("items")
-      .eq("id", DOC_ID)
-      .maybeSingle();
+      .from("initiatives")
+      .select("*")
+      .order("position", { ascending: true });
     if (error) throw error;
-    return data ? data.items : null; // null when no row exists yet
+    return data || [];
   } catch (e) {
     console.error("loadData failed:", e);
-    return null;
-  }
-}
-
-async function saveData(items) {
-  try {
-    const { error } = await supabase
-      .from("roadmap")
-      .upsert({ id: DOC_ID, items, updated_at: new Date().toISOString() });
-    if (error) throw error;
-  } catch (e) {
-    console.error("saveData failed:", e);
+    return [];
   }
 }
 
@@ -214,15 +210,17 @@ export default function App({ publicItems } = {}) {
   const fileInputRef = useRef(null);
   const rootRef = useRef(null);
   const toolbarRef = useRef(null);
-  const saveTimer = useRef(null);
+  const itemsRef = useRef(items);      // latest items, for the debounced flush
+  const dirtyIds = useRef(new Set());  // ids whose rows need upserting
+  const flushTimer = useRef(null);
 
-  // Load the doc only for the signed-in owner. Reads are locked to the owner by
+  // Load the rows only for the signed-in owner. Reads are locked to the owner by
   // RLS, so there is nothing to fetch (and nothing to show) for anyone else.
   useEffect(() => {
     if (isPublic) return;
     const isOwner = !!session && session.user && session.user.email === OWNER_EMAIL;
     if (!isOwner) { setItems(null); setLoaded(false); return; }
-    loadData().then(d => { setItems(d || DEFAULT_ITEMS); setLoaded(true); });
+    loadData().then(d => { setItems(d); setLoaded(true); });
   }, [session, isPublic]);
 
   // Track the Supabase auth session (persisted in localStorage by supabase-js).
@@ -233,17 +231,10 @@ export default function App({ publicItems } = {}) {
     return () => sub.subscription.unsubscribe();
   }, [isPublic]);
 
-  // Debounced save: batches rapid edits (e.g. typing) into one network write.
-  // Only the owner writes — RLS rejects anyone else, so don't even attempt it
-  // (avoids a failed write firing on every page load for read-only visitors).
-  useEffect(() => {
-    if (isPublic || !loaded || !items) return;
-    const isOwner = !!session && session.user && session.user.email === OWNER_EMAIL;
-    if (!isOwner) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { saveData(items); }, 600);
-    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [items, loaded, session]);
+  // Keep a ref to the latest items so the debounced flush upserts current data.
+  useEffect(() => { itemsRef.current = items; }, [items]);
+  // Flush any pending edits on unmount so a quick edit-then-close isn't lost.
+  useEffect(() => () => { if (dirtyIds.current.size) flushDirty(); }, []); // eslint-disable-line
 
   useEffect(() => {
     if (editId == null && adding == null) return;
@@ -325,10 +316,43 @@ export default function App({ publicItems } = {}) {
   if (!items) return <div style={{ padding: "2rem", fontSize: 13, color: C.textSecondary }}>Loading…</div>;
 
   const score = i => i.ease * i.impact * confidenceOf(i);
-  const nextId = items.length ? Math.max(...items.map(i => i.id)) + 1 : 1;
 
-  const update = (id, f, v) => setItems(p => p.map(i => i.id === id ? { ...i, [f]: v } : i));
-  const remove = id => setItems(p => p.filter(i => i.id !== id));
+  // Mark a row dirty and debounce-flush it (and any siblings edited in the window)
+  // as per-row upserts. Batches keystrokes without touching other items' rows.
+  function markDirty(id) {
+    dirtyIds.current.add(id);
+    if (flushTimer.current) clearTimeout(flushTimer.current);
+    flushTimer.current = setTimeout(flushDirty, 600);
+  }
+  async function flushDirty() {
+    const ids = [...dirtyIds.current];
+    dirtyIds.current.clear();
+    const rows = ids.map(id => itemsRef.current.find(i => i.id === id)).filter(Boolean).map(toDbRow);
+    if (!rows.length) return;
+    try {
+      const { error } = await supabase.from("initiatives").upsert(rows);
+      if (error) throw error;
+    } catch (e) { console.error("sync failed:", e); }
+  }
+  async function deleteRow(id) {
+    dirtyIds.current.delete(id);
+    try {
+      const { error } = await supabase.from("initiatives").delete().eq("id", id);
+      if (error) throw error;
+    } catch (e) { console.error("delete failed:", e); }
+  }
+  async function replaceAll(rows) { // used by CSV import: swap the whole table
+    try {
+      await supabase.from("initiatives").delete().neq("id", IMPOSSIBLE_ID);
+      if (rows.length) {
+        const { error } = await supabase.from("initiatives").insert(rows.map(toDbRow));
+        if (error) throw error;
+      }
+    } catch (e) { console.error("replaceAll failed:", e); }
+  }
+
+  const update = (id, f, v) => { setItems(p => p.map(i => i.id === id ? { ...i, [f]: v } : i)); markDirty(id); };
+  const remove = id => { setItems(p => p.filter(i => i.id !== id)); deleteRow(id); };
 
   const toggleDesc = id => setOpenDesc(o => ({ ...o, [id]: !o[id] }));
   const anyDesc = items.some(i => i.description && String(i.description).trim());
@@ -344,7 +368,11 @@ export default function App({ publicItems } = {}) {
   function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", description: "", area: "", version: "", ease: 0, impact: 0, evidence: {}, link: "", group }); }
   function commitAdd() {
     if (!newItem.title.trim()) { setAdding(null); return; }
-    setItems(p => [...p, { ...newItem, id: nextId, title: newItem.title.trim() }]);
+    const id = crypto.randomUUID();
+    const maxPos = itemsRef.current.reduce((m, i) => Math.max(m, i.position || 0), 0);
+    const row = { ...newItem, id, title: newItem.title.trim(), evidence: newItem.evidence || {}, position: maxPos + 1 };
+    setItems(p => [...p, row]);
+    markDirty(id);
     setAdding(null);
   }
   function onEditKeyDown(e, isNew) {
@@ -387,27 +415,33 @@ export default function App({ publicItems } = {}) {
         const ci = { title: col("initiative"), description: col("description"), area: col("area"), version: col("version"), ease: col("ease"), impact: col("impact"), confidence: col("confidence"), link: col("link"), group: col("group") };
         const cleanLink = str => String(str || "").replace(/^\s*figma\s*[-–—:]\s*/i, "").trim();
         const cell = (row, idx) => idx >= 0 && idx < row.length ? String(row[idx]).trim() : "";
+        // One column per evidence factor (header = factor label); truthy = checked.
+        const evidenceCols = EVIDENCE.map(f => ({ key: f.key, idx: col(f.label.toLowerCase()) }));
+        const isChecked = s => { const v = s.trim().toLowerCase(); return v !== "" && v !== "0" && v !== "false" && v !== "no"; };
         const parsed = data.slice(1).map((row, idx) => {
+          const evidence = {};
+          evidenceCols.forEach(({ key, idx: ci2 }) => { if (ci2 >= 0 && isChecked(cell(row, ci2))) evidence[key] = true; });
           return {
-            id: idx + 1,
+            id: crypto.randomUUID(),
             title: cell(row, ci.title),
             description: cell(row, ci.description),
             area: cell(row, ci.area),
             version: cell(row, ci.version),
             ease: Number(cell(row, ci.ease)) || 0,
             impact: Number(cell(row, ci.impact)) || 0,
-            evidence: {}, // Confidence is derived from evidence; CSV import starts empty
+            evidence, // rebuilt from the per-factor columns; Confidence itself is derived
             link: cleanLink(cell(row, ci.link)),
             group: cell(row, ci.group) || "Next",
+            position: idx + 1,
           };
         }).filter(i => i.title !== "");
-        if (parsed.length) { setItems(parsed); setEditId(null); setAdding(null); setCollapsed({}); }
+        if (parsed.length) { setItems(parsed); setEditId(null); setAdding(null); setCollapsed({}); replaceAll(parsed); }
       },
     });
   }
 
   function exportCsv() {
-    const headers = ["Initiative", "Description", "Area", "Version", "Score", "Ease", "Impact", "Confidence", "Link", "Group"];
+    const headers = ["Initiative", "Description", "Area", "Version", "Score", "Ease", "Impact", "Confidence", "Link", "Group", ...EVIDENCE.map(f => f.label)];
     const esc = v => {
       const str = String(v ?? "");
       return /[",\n\r]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
@@ -418,6 +452,7 @@ export default function App({ publicItems } = {}) {
       i.ease, i.impact,
       confidenceOf(i),
       i.link, i.group,
+      ...EVIDENCE.map(f => (i.evidence && i.evidence[f.key]) ? "1" : ""),
     ].map(esc).join(","));
     const csv = "\uFEFF" + [headers.join(","), ...lines].join("\r\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -433,25 +468,29 @@ export default function App({ publicItems } = {}) {
 
   function handleDrop(targetGroup, targetId) {
     const fromId = dragId_r.current;
-    if (fromId == null) return;
+    const clear = () => { dragId_r.current = null; setDragId(null); setOverInfo({ id: null, group: null }); };
+    if (fromId == null || targetId === fromId) { clear(); return; } // dropped onto itself → no-op
     setItems(prev => {
-      if (targetId === fromId) return prev; // dropped onto itself → leave in place
-      let arr = [...prev];
-      const fromIdx = arr.findIndex(i => i.id === fromId);
-      const moved = { ...arr[fromIdx], group: targetGroup };
-      arr.splice(fromIdx, 1);
-      if (targetId != null) {
-        const toIdx = arr.findIndex(i => i.id === targetId);
-        arr.splice(toIdx, 0, moved);
-      } else {
-        const lastGroupIdx = arr.map(i => i.group).lastIndexOf(targetGroup);
-        arr.splice(lastGroupIdx + 1, 0, moved);
+      if (!prev.some(i => i.id === fromId)) return prev;
+      // Neighbours in the target group, ordered by position, excluding the moved row.
+      const groupItems = prev.filter(i => i.group === targetGroup && i.id !== fromId).sort((a, b) => a.position - b.position);
+      let newPos;
+      if (targetId == null) { // dropped on the group's empty area → append to the end
+        const last = groupItems[groupItems.length - 1];
+        const maxAll = prev.reduce((m, i) => Math.max(m, i.position || 0), 0);
+        newPos = last ? last.position + 1 : maxAll + 1;
+      } else { // insert just before the target row (matches the old splice behaviour)
+        const ti = groupItems.findIndex(i => i.id === targetId);
+        const target = groupItems[ti];
+        const before = groupItems[ti - 1];
+        newPos = before ? (before.position + target.position) / 2 : target.position - 1;
       }
-      return arr;
+      return prev
+        .map(i => i.id === fromId ? { ...i, group: targetGroup, position: newPos } : i)
+        .sort((a, b) => a.position - b.position);
     });
-    dragId_r.current = null;
-    setDragId(null);
-    setOverInfo({ id: null, group: null });
+    markDirty(fromId);
+    clear();
   }
 
   const colW = {
@@ -746,7 +785,7 @@ export default function App({ publicItems } = {}) {
         const setEv = (key, checked) => {
           if (!canEdit) return;
           if (isNewT) setNewItem(n => ({ ...n, evidence: { ...(n.evidence || {}), [key]: checked } }));
-          else setItems(p => p.map(i => i.id === evidenceFor ? { ...i, evidence: { ...(i.evidence || {}), [key]: checked } } : i));
+          else { setItems(p => p.map(i => i.id === evidenceFor ? { ...i, evidence: { ...(i.evidence || {}), [key]: checked } } : i)); markDirty(evidenceFor); }
         };
         return (
           <div onMouseDown={() => setEvidenceFor(null)}

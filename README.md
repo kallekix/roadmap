@@ -144,3 +144,59 @@ create policy "owner read" on roadmap for select
 | `SHARE_TOKEN` | `.env.local` **and** Vercel | Long random string. The public view lives at `/v/<this>`. Change it to revoke the old link. |
 
 Share link: `https://<your-app>.vercel.app/v/<SHARE_TOKEN>`
+
+---
+
+## Normalized storage (one row per initiative) — supersedes the blob
+
+Storage moved from the single `roadmap.items` blob to a normalized `initiatives`
+table (one row per item), so two open tabs editing **different** items no longer
+overwrite each other's whole document. Order is a float `position` (fractional
+rank: a drag is a single-row write). `evidence` (the 9 confidence checkboxes)
+lives as jsonb on the row. Reads stay owner-only; `/v/<token>` reads all rows via
+the secret key.
+
+Run once in the SQL Editor:
+
+```sql
+-- 1. Normalized table.
+create table if not exists initiatives (
+  id          uuid primary key default gen_random_uuid(),
+  title       text not null default '',
+  description text not null default '',
+  area        text not null default '',
+  version     text not null default '',
+  ease        int  not null default 0,
+  impact      int  not null default 0,
+  evidence    jsonb not null default '{}'::jsonb,
+  "group"     text not null default 'Next',
+  link        text not null default '',
+  position    double precision not null default 0,
+  updated_at  timestamptz not null default now()
+);
+
+alter table initiatives enable row level security;
+create policy "owner read"   on initiatives for select using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+create policy "owner insert" on initiatives for insert with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+create policy "owner update" on initiatives for update using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net') with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+create policy "owner delete" on initiatives for delete using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+
+-- 2. Migrate the existing blob (roadmap.items) into rows, preserving order.
+insert into initiatives (title, description, area, version, ease, impact, evidence, link, "group", position)
+select
+  coalesce(e->>'title', ''),
+  coalesce(e->>'description', ''),
+  coalesce(e->>'area', ''),
+  coalesce(e->>'version', ''),
+  coalesce((e->>'ease')::numeric, 0)::int,
+  coalesce((e->>'impact')::numeric, 0)::int,
+  coalesce(e->'evidence', '{}'::jsonb),
+  coalesce(e->>'link', ''),
+  coalesce(nullif(e->>'group', ''), 'Next'),
+  ord
+from roadmap, jsonb_array_elements(items) with ordinality as t(e, ord)
+where roadmap.id = 'main';
+
+-- 3. AFTER verifying the app works against the new table, optionally:
+-- drop table roadmap;
+```

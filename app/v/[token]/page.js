@@ -20,12 +20,11 @@ export default async function PublicVersions({ params }) {
   // so we pass the full list. NOTE: all items are exposed on this obscure URL.
   const admin = createAdminClient();
   const { data } = await admin
-    .from("roadmap")
-    .select("items")
-    .eq("id", "main")
-    .maybeSingle();
+    .from("initiatives")
+    .select("*")
+    .order("position", { ascending: true });
 
-  const all = data && Array.isArray(data.items) ? data.items : [];
+  const all = data || [];
 
   return <App publicItems={all} />;
 }

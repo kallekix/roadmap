@@ -200,3 +200,45 @@ where roadmap.id = 'main';
 -- 3. AFTER verifying the app works against the new table, optionally:
 -- drop table roadmap;
 ```
+
+---
+
+## Central versions table — supersedes free-text `initiatives.version`
+
+Versions are now a first-class entity (a version number + a description),
+managed from the Versions tab. Initiatives reference a version by id
+(`version_id`), not by matching text, so renaming a version's number in its
+edit dialog updates everywhere it's used instead of orphaning old rows.
+
+Run once in the SQL Editor:
+
+```sql
+-- 1. Central versions table.
+create table if not exists versions (
+  id          uuid primary key default gen_random_uuid(),
+  version     text not null default '',
+  description text not null default '',
+  created_at  timestamptz not null default now()
+);
+
+alter table versions enable row level security;
+create policy "owner read"   on versions for select using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+create policy "owner insert" on versions for insert with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+create policy "owner update" on versions for update using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net') with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+create policy "owner delete" on versions for delete using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
+
+-- 2. Migrate existing free-text initiatives.version values into rows.
+insert into versions (version)
+select distinct trim(version) from initiatives where trim(version) <> '';
+
+-- 3. Point initiatives at the new table.
+alter table initiatives add column if not exists version_id uuid references versions(id) on delete set null;
+
+update initiatives i
+set version_id = v.id
+from versions v
+where trim(i.version) = v.version and trim(i.version) <> '';
+
+-- 4. AFTER verifying the app works against version_id, drop the old text column:
+-- alter table initiatives drop column version;
+```

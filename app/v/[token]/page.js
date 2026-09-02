@@ -19,12 +19,12 @@ export default async function PublicVersions({ params }) {
   // every initiative — version groups plus an "Unassigned initiatives" section —
   // so we pass the full list. NOTE: all items are exposed on this obscure URL.
   const admin = createAdminClient();
-  const { data } = await admin
-    .from("initiatives")
-    .select("*")
-    .order("position", { ascending: true });
+  const [{ data: itemsData }, { data: versionsData }] = await Promise.all([
+    admin.from("initiatives").select("*").order("position", { ascending: true }),
+    admin.from("versions").select("*"),
+  ]);
 
-  const all = data || [];
+  const all = itemsData || [];
 
-  return <App publicItems={all} />;
+  return <App publicItems={all} publicVersions={versionsData || []} />;
 }

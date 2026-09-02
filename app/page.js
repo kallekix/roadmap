@@ -81,6 +81,7 @@ function Icon({ name, size = 16, style }) {
     case "moon": return <svg {...s}><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>;
     case "maximize": return <svg {...s}><path d="M4 9V5a1 1 0 0 1 1-1h4" /><path d="M20 9V5a1 1 0 0 0-1-1h-4" /><path d="M4 15v4a1 1 0 0 0 1 1h4" /><path d="M20 15v4a1 1 0 0 1-1 1h-4" /></svg>;
     case "minimize": return <svg {...s}><path d="M9 4v4a1 1 0 0 1-1 1H4" /><path d="M15 4v4a1 1 0 0 0 1 1h4" /><path d="M9 20v-4a1 1 0 0 0-1-1H4" /><path d="M15 20v-4a1 1 0 0 1 1-1h4" /></svg>;
+    case "pencil": return <svg {...s}><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>;
     default: return null;
   }
 }
@@ -153,7 +154,7 @@ function toDbRow(it) {
     title: it.title || "",
     description: it.description || "",
     area: it.area || "",
-    version: it.version || "",
+    version_id: it.version_id || null,
     ease: it.ease || 0,
     impact: it.impact || 0,
     evidence: it.evidence || {},
@@ -178,18 +179,39 @@ async function loadData() {
   }
 }
 
+// Versions are a central table now (version number + description), referenced
+// by initiatives.version_id — so renaming a version's number doesn't orphan
+// the initiatives that use it.
+async function loadVersions() {
+  try {
+    const { data, error } = await supabase.from("versions").select("*");
+    if (error) throw error;
+    return data || [];
+  } catch (e) {
+    console.error("loadVersions failed:", e);
+    return [];
+  }
+}
+
+function sortVersions(list) {
+  return [...list].sort((a, b) => (a.version || "").localeCompare(b.version || "", undefined, { numeric: true }));
+}
+
 // When `publicItems` is passed (by the server-rendered /v/<token> page), the
 // component runs in PUBLIC mode: read-only, Versions view only, no auth, no
 // Supabase access from the browser. Otherwise it's the private owner app.
-export default function App({ publicItems } = {}) {
+export default function App({ publicItems, publicVersions } = {}) {
   const isPublic = Array.isArray(publicItems);
   const [mode, setMode] = useState("dark");
   const [view, setView] = useState(isPublic ? "versions" : "main");
   const [items, setItems] = useState(isPublic ? publicItems : null);
+  const [versions, setVersions] = useState(isPublic ? (publicVersions || []) : null);
   const [loaded, setLoaded] = useState(isPublic);
   const [editId, setEditId] = useState(null);
   const [adding, setAdding] = useState(null);
   const [newItem, setNewItem] = useState({});
+  const [versionEditFor, setVersionEditFor] = useState(null); // version id, "new", or null
+  const [versionDraft, setVersionDraft] = useState({ version: "", description: "" });
   const [collapsed, setCollapsed] = useState({});
   const [openDesc, setOpenDesc] = useState({});
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -219,8 +241,8 @@ export default function App({ publicItems } = {}) {
   useEffect(() => {
     if (isPublic) return;
     const isOwner = !!session && session.user && session.user.email === OWNER_EMAIL;
-    if (!isOwner) { setItems(null); setLoaded(false); return; }
-    loadData().then(d => { setItems(d); setLoaded(true); });
+    if (!isOwner) { setItems(null); setVersions(null); setLoaded(false); return; }
+    Promise.all([loadData(), loadVersions()]).then(([d, v]) => { setItems(d); setVersions(v); setLoaded(true); });
   }, [session, isPublic]);
 
   // Track the Supabase auth session (persisted in localStorage by supabase-js).
@@ -313,9 +335,11 @@ export default function App({ publicItems } = {}) {
     );
   }
 
-  if (!items) return <div style={{ padding: "2rem", fontSize: 13, color: C.textSecondary }}>Loading…</div>;
+  if (!items || !versions) return <div style={{ padding: "2rem", fontSize: 13, color: C.textSecondary }}>Loading…</div>;
 
   const score = i => i.ease * i.impact * confidenceOf(i);
+  const versionById = id => versions.find(v => v.id === id);
+  const versionText = id => { const v = versionById(id); return v ? v.version : ""; };
 
   // Mark a row dirty and debounce-flush it (and any siblings edited in the window)
   // as per-row upserts. Batches keystrokes without touching other items' rows.
@@ -354,6 +378,30 @@ export default function App({ publicItems } = {}) {
   const update = (id, f, v) => { setItems(p => p.map(i => i.id === id ? { ...i, [f]: v } : i)); markDirty(id); };
   const remove = id => { setItems(p => p.filter(i => i.id !== id)); deleteRow(id); };
 
+  function openNewVersion() { setVersionDraft({ version: "", description: "" }); setVersionEditFor("new"); }
+  function openVersionEdit(v) { setVersionDraft({ version: v.version || "", description: v.description || "" }); setVersionEditFor(v.id); }
+  async function saveVersionDraft() {
+    const text = versionDraft.version.trim();
+    if (!text) return;
+    const description = versionDraft.description || "";
+    if (versionEditFor === "new") {
+      const id = crypto.randomUUID();
+      setVersions(v => [...v, { id, version: text, description }]);
+      try {
+        const { error } = await supabase.from("versions").insert({ id, version: text, description });
+        if (error) throw error;
+      } catch (e) { console.error("version insert failed:", e); }
+    } else {
+      const id = versionEditFor;
+      setVersions(v => v.map(x => x.id === id ? { ...x, version: text, description } : x));
+      try {
+        const { error } = await supabase.from("versions").update({ version: text, description }).eq("id", id);
+        if (error) throw error;
+      } catch (e) { console.error("version update failed:", e); }
+    }
+    setVersionEditFor(null);
+  }
+
   const toggleDesc = id => setOpenDesc(o => ({ ...o, [id]: !o[id] }));
   const anyDesc = items.some(i => i.description && String(i.description).trim());
   function toggleAllDesc() {
@@ -365,7 +413,7 @@ export default function App({ publicItems } = {}) {
     setOpenDesc(all);
   }
 
-  function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", description: "", area: "", version: "", ease: 0, impact: 0, evidence: {}, link: "", group }); }
+  function startAdd(group) { setAdding(group); setEditId(null); setNewItem({ title: "", description: "", area: "", version_id: null, ease: 0, impact: 0, evidence: {}, link: "", group }); }
   function commitAdd() {
     if (!newItem.title.trim()) { setAdding(null); return; }
     const id = crypto.randomUUID();
@@ -407,7 +455,7 @@ export default function App({ publicItems } = {}) {
   function importCsv(file) {
     Papa.parse(file, {
       skipEmptyLines: true,
-      complete: res => {
+      complete: async res => {
         const data = res.data;
         if (!data.length) return;
         const header = data[0].map(h => String(h).trim().toLowerCase());
@@ -418,6 +466,22 @@ export default function App({ publicItems } = {}) {
         // One column per evidence factor (header = factor label); truthy = checked.
         const evidenceCols = EVIDENCE.map(f => ({ key: f.key, idx: col(f.label.toLowerCase()) }));
         const isChecked = s => { const v = s.trim().toLowerCase(); return v !== "" && v !== "0" && v !== "false" && v !== "no"; };
+
+        // Version is a free-text column in the CSV but a central table in the app:
+        // reuse a matching version by text, or create a new one.
+        const versionMap = {};
+        versions.forEach(v => { versionMap[v.version] = v.id; });
+        const versionsToInsert = [];
+        const versionIdFor = text => {
+          if (!text) return null;
+          if (!versionMap[text]) {
+            const id = crypto.randomUUID();
+            versionMap[text] = id;
+            versionsToInsert.push({ id, version: text, description: "" });
+          }
+          return versionMap[text];
+        };
+
         const parsed = data.slice(1).map((row, idx) => {
           const evidence = {};
           evidenceCols.forEach(({ key, idx: ci2 }) => { if (ci2 >= 0 && isChecked(cell(row, ci2))) evidence[key] = true; });
@@ -426,7 +490,7 @@ export default function App({ publicItems } = {}) {
             title: cell(row, ci.title),
             description: cell(row, ci.description),
             area: cell(row, ci.area),
-            version: cell(row, ci.version),
+            version_id: versionIdFor(cell(row, ci.version)),
             ease: Number(cell(row, ci.ease)) || 0,
             impact: Number(cell(row, ci.impact)) || 0,
             evidence, // rebuilt from the per-factor columns; Confidence itself is derived
@@ -435,7 +499,16 @@ export default function App({ publicItems } = {}) {
             position: idx + 1,
           };
         }).filter(i => i.title !== "");
-        if (parsed.length) { setItems(parsed); setEditId(null); setAdding(null); setCollapsed({}); replaceAll(parsed); }
+        if (parsed.length) {
+          if (versionsToInsert.length) {
+            setVersions(v => [...v, ...versionsToInsert]);
+            try {
+              const { error } = await supabase.from("versions").insert(versionsToInsert);
+              if (error) throw error;
+            } catch (e) { console.error("version insert failed:", e); }
+          }
+          setItems(parsed); setEditId(null); setAdding(null); setCollapsed({}); replaceAll(parsed);
+        }
       },
     });
   }
@@ -447,7 +520,7 @@ export default function App({ publicItems } = {}) {
       return /[",\n\r]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
     };
     const lines = items.map(i => [
-      i.title, i.description || "", i.area, i.version,
+      i.title, i.description || "", i.area, versionText(i.version_id),
       Math.round(score(i) * 10) / 10,
       i.ease, i.impact,
       confidenceOf(i),
@@ -526,7 +599,14 @@ export default function App({ publicItems } = {}) {
           <AutoTextarea val={it.description || ""} onChange={v => set("description", v)} C={C} placeholder="Description…" />
         </td>
         <td style={ec}><input placeholder="Area" value={it.area} onChange={e => set("area", e.target.value)} style={inputStyle} /></td>
-        <td style={ec}><input placeholder="2.0" value={it.version} onChange={e => set("version", e.target.value)} style={inputStyle} /></td>
+        <td style={ec}>
+          <select value={it.version_id || ""} onChange={e => set("version_id", e.target.value || null)} style={inputStyle}>
+            <option value="">—</option>
+            {sortVersions(versions).map(v => (
+              <option key={v.id} value={v.id}>{v.version}{v.description ? ` — ${v.description}` : ""}</option>
+            ))}
+          </select>
+        </td>
         <td style={{ ...ec, textAlign: "right" }}><ScoreCell score={it.ease * it.impact * confidenceOf(it)} C={C} /></td>
         <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.ease} onChange={v => set("ease", v)} C={C} min={0} max={10} step={1} /></td>
         <td style={{ ...ec, textAlign: "right" }}><NumInput val={it.impact} onChange={v => set("impact", v)} C={C} min={0} max={10} step={1} /></td>
@@ -568,7 +648,7 @@ export default function App({ publicItems } = {}) {
           </div>
         </td>
         <td style={dc}>{item.area ? (() => { const a = areaStyle(item.area, mode); return <span style={{ background: a.bg, color: a.color, fontSize: 12, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{item.area}</span>; })() : null}</td>
-        <td style={dc}>{item.version ? (() => { const a = areaStyle(item.version, mode); return <span style={{ background: a.bg, color: a.color, fontSize: 12, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{item.version}</span>; })() : null}</td>
+        <td style={dc}>{item.version_id ? (() => { const vt = versionText(item.version_id); const a = areaStyle(vt, mode); return <span style={{ background: a.bg, color: a.color, fontSize: 12, fontWeight: 500, padding: "2px 9px", borderRadius: 999 }}>{vt}</span>; })() : null}</td>
         <td style={{ ...dc, textAlign: "right" }}><ScoreCell score={score(item)} C={C} /></td>
         <td style={{ ...dc, textAlign: "right", color: item.ease ? C.textPrimary : C.textTertiary }}>{item.ease || "–"}</td>
         <td style={{ ...dc, textAlign: "right", color: item.impact ? C.textPrimary : C.textTertiary }}>{item.impact || "–"}</td>
@@ -582,7 +662,7 @@ export default function App({ publicItems } = {}) {
     );
   }
 
-  function GroupCard({ label, rows, allowDrag }) {
+  function GroupCard({ label, rows, allowDrag, subtitle, onEdit }) {
     const collapseKey = view + ":" + label;
     const isCollapsed = collapsed[collapseKey];
     const isGroupDropTarget = allowDrag && overInfo.group === label && overInfo.id === null;
@@ -593,6 +673,15 @@ export default function App({ publicItems } = {}) {
           <span style={{ color: C.accent, display: "inline-flex" }}><Icon name={isCollapsed ? "chevron-right" : "chevron-down"} size={15} /></span>
           <span style={{ fontWeight: 500, fontSize: 15, color: C.accent }}>{label}</span>
           <span style={{ fontSize: 12, color: C.textTertiary, fontWeight: 400 }}>{rows.length}</span>
+          {subtitle && subtitle.trim() && (
+            <span style={{ fontSize: 13, color: C.textSecondary, fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{subtitle}</span>
+          )}
+          {onEdit && (
+            <button onClick={e => { e.stopPropagation(); onEdit(); }} title="Edit version" aria-label="Edit version"
+              style={{ marginLeft: "auto", flexShrink: 0, background: "none", border: "none", padding: 4, cursor: "pointer", color: C.textTertiary, display: "inline-flex" }}>
+              <Icon name="pencil" size={14} />
+            </button>
+          )}
         </div>
         {!isCollapsed && (
           <div
@@ -663,8 +752,7 @@ export default function App({ publicItems } = {}) {
     );
   }
 
-  const versions = [...new Set(items.filter(i => (i.version || "").trim() !== "").map(i => i.version.trim()))]
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const sortedVersions = sortVersions(versions);
 
   const tabBtn = (id, label) => {
     const active = view === id;
@@ -714,6 +802,11 @@ export default function App({ publicItems } = {}) {
           <button onClick={exportCsv} style={toolBtn} aria-label="Export as CSV">
             <Icon name="download" size={15} /> Export CSV
           </button>
+          {!isPublic && canEdit && view === "versions" && (
+            <button onClick={openNewVersion} style={toolBtn} aria-label="Add version">
+              <Icon name="plus" size={15} /> Add version
+            </button>
+          )}
           <button onClick={() => setMode(m => m === "dark" ? "light" : "dark")} style={toolBtn} aria-label="Toggle color mode">
             <Icon name={mode === "dark" ? "sun" : "moon"} size={15} /> {mode === "dark" ? "Light" : "Dark"}
           </button>
@@ -730,18 +823,18 @@ export default function App({ publicItems } = {}) {
         GroupCard({ label: group, rows: items.filter(i => (i.group || "").trim() === group), allowDrag: canEdit })
       )}
 
-      {isPublic && versions.length > 0 && <div data-crumb="Versions" data-crumb-level="section" style={sectionBar}>Versions</div>}
+      {isPublic && sortedVersions.length > 0 && <div data-crumb="Versions" data-crumb-level="section" style={sectionBar}>Versions</div>}
 
       {view === "versions" && (
-        versions.length === 0
-          ? (!isPublic ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No initiatives have a version set yet. Add a version to an item in the Main view to see it grouped here.</div> : null)
-          : versions.map(v =>
-            GroupCard({ label: v, rows: items.filter(i => (i.version || "").trim() === v), allowDrag: false })
+        sortedVersions.length === 0
+          ? (!isPublic ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No versions yet. Add one with the "Add version" button above.</div> : null)
+          : sortedVersions.map(v =>
+            GroupCard({ label: v.version, rows: items.filter(i => i.version_id === v.id), allowDrag: false, subtitle: v.description, onEdit: canEdit ? () => openVersionEdit(v) : null })
           )
       )}
 
       {isPublic && (() => {
-        const unassigned = items.filter(i => (i.version || "").trim() === "");
+        const unassigned = items.filter(i => !i.version_id);
         const groups = [...GROUPS, ...[...new Set(unassigned.map(i => (i.group || "").trim()))].filter(g => g && !GROUPS.includes(g))]
           .filter(g => unassigned.some(i => (i.group || "").trim() === g));
         if (!groups.length) return null;
@@ -771,6 +864,29 @@ export default function App({ publicItems } = {}) {
                   style={{ background: "none", color: C.textSecondary, border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", fontSize: 13, padding: "6px 14px" }}>Cancel</button>
                 <button onClick={() => { remove(confirmDelete); setConfirmDelete(null); setEditId(null); }}
                   style={{ background: "#e5484d", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 500, padding: "6px 14px" }}>Delete</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {versionEditFor != null && (() => {
+        const isNewV = versionEditFor === "new";
+        return (
+          <div onMouseDown={() => setVersionEditFor(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+            <div onMouseDown={e => e.stopPropagation()}
+              style={{ background: C.cardBg, border: `1px solid ${C.cardBorder}`, borderRadius: 12, padding: 20, maxWidth: 420, width: "100%", boxShadow: "0 12px 40px rgba(0,0,0,0.4)" }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: C.textPrimary, marginBottom: 14 }}>{isNewV ? "Add version" : "Edit version"}</div>
+              <label style={{ fontSize: 12, color: C.textSecondary, display: "block", marginBottom: 4 }}>Version</label>
+              <input autoFocus placeholder="2.0" value={versionDraft.version} onChange={e => setVersionDraft(d => ({ ...d, version: e.target.value }))} style={inputStyle} />
+              <label style={{ fontSize: 12, color: C.textSecondary, display: "block", marginTop: 12, marginBottom: 4 }}>Description</label>
+              <AutoTextarea val={versionDraft.description} onChange={v => setVersionDraft(d => ({ ...d, description: v }))} C={C} placeholder="What's in this version…" />
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+                <button onClick={() => setVersionEditFor(null)}
+                  style={{ background: "none", color: C.textSecondary, border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", fontSize: 13, padding: "6px 14px" }}>Cancel</button>
+                <button onClick={saveVersionDraft} disabled={!versionDraft.version.trim()}
+                  style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 8, cursor: versionDraft.version.trim() ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 500, padding: "6px 14px", opacity: versionDraft.version.trim() ? 1 : 0.5 }}>Save</button>
               </div>
             </div>
           </div>

@@ -28,13 +28,22 @@ with a private owner editor and a public read-only share link.
   `SUPABASE_SERVICE_ROLE_KEY` (a `sb_secret_…` key, server-only, never `NEXT_PUBLIC_`),
   `SHARE_TOKEN` (obscure token for the public URL).
 
-## Data model — `initiatives` table (one row per initiative)
+## Data model — `initiatives` and `versions` tables
 
-Storage was migrated from a single JSON blob to a normalized table so that two
-tabs editing different items don't clobber each other. Columns:
-`id uuid`, `title`, `description`, `area`, `version`, `ease int`, `impact int`,
-`evidence jsonb`, `"group"` (reserved word — always quote in SQL), `link`,
-`position double precision`, `updated_at`.
+Storage was migrated from a single JSON blob to normalized tables so that two
+tabs editing different items don't clobber each other.
+
+`initiatives` (one row per initiative): `id uuid`, `title`, `description`, `area`,
+`version_id uuid` (FK → `versions.id`, nullable, `on delete set null`), `ease int`,
+`impact int`, `evidence jsonb`, `"group"` (reserved word — always quote in SQL),
+`link`, `position double precision`, `updated_at`.
+
+`versions` (one row per version, managed from the Versions tab): `id uuid`,
+`version text` (short label, e.g. "2.0"), `description text`, `created_at`.
+Versions are central — initiatives reference a version **by id**, not by
+matching text, so renaming a version's number (via its edit dialog) updates
+everywhere it's used instead of orphaning old rows. Managed with the same
+direct-write pattern as auth (no debounce): the edit/add dialog writes on Save.
 
 - **Ordering** is the `position` float (fractional rank). A drag sets the moved
   row's position to the **midpoint between its new neighbours** → one-row write.
@@ -42,15 +51,18 @@ tabs editing different items don't clobber each other. Columns:
 - **Confidence is derived, never stored.** `confidenceOf(item)` sums the weights of
   checked `evidence` factors (the `EVIDENCE` array), capped at 10. Editing happens
   in a modal opened from the Confidence "link" cell.
-- IDs are client-generated with `crypto.randomUUID()` for new items.
+- IDs are client-generated with `crypto.randomUUID()` for new items and versions.
 
 ## Persistence layer (in `App`)
 
-- Load: `select * from initiatives order by position`.
-- Writes are **per-row and debounced (~600ms)**: `markDirty(id)` collects ids, a
-  timer flushes them as `upsert`s (`toDbRow` maps item→columns). `remove` deletes a
-  row; CSV import does a full `replaceAll` (delete all → insert). `itemsRef` mirrors
-  latest state for the flush.
+- Load: `select * from initiatives order by position` and `select * from versions`,
+  in parallel.
+- Initiative writes are **per-row and debounced (~600ms)**: `markDirty(id)` collects
+  ids, a timer flushes them as `upsert`s (`toDbRow` maps item→columns). `remove`
+  deletes a row; CSV import does a full `replaceAll` (delete all → insert). `itemsRef`
+  mirrors latest state for the flush. CSV's free-text "Version" column is resolved
+  (or created) against the `versions` table on import, and rendered back out as text
+  on export via `versionText(id)`.
 - Only the owner writes; RLS rejects anyone else, and the read-only UI never triggers writes.
 
 ## Security model
@@ -61,10 +73,11 @@ tabs editing different items don't clobber each other. Columns:
 - RLS on `initiatives` is **owner-only for select/insert/update/delete** (email match
   via `auth.jwt() ->> 'email'`). The publishable key alone can read nothing.
 - Three UI modes in `App`: owner (full editor), signed-out (sign-in gate, no data),
-  and **public** (`publicItems` prop passed by the server route → read-only, no auth,
-  no Supabase from the browser).
-- Public view lives at `/v/<SHARE_TOKEN>`: the server component reads all rows with
-  the **secret key** and passes them in. Wrong token → 404. It shows version groups
+  and **public** (`publicItems`/`publicVersions` props passed by the server route →
+  read-only, no auth, no Supabase from the browser).
+- Public view lives at `/v/<SHARE_TOKEN>`: the server component reads all
+  `initiatives` and `versions` rows with the **secret key** and passes them in.
+  Wrong token → 404. It shows version groups (with descriptions, no edit button)
   plus an "Unassigned initiatives" section (all initiatives are exposed on this URL).
 
 ## Conventions & gotchas

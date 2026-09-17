@@ -208,7 +208,7 @@ function sortVersions(list) {
 export default function App({ publicItems, publicVersions } = {}) {
   const isPublic = Array.isArray(publicItems);
   const [mode, setMode] = useState("dark");
-  const [view, setView] = useState(isPublic ? "versions" : "main");
+  const [view, setView] = useState(isPublic ? "planned" : "main");
   const [items, setItems] = useState(isPublic ? publicItems : null);
   const [versions, setVersions] = useState(isPublic ? (publicVersions || []) : null);
   const [loaded, setLoaded] = useState(isPublic);
@@ -786,24 +786,20 @@ export default function App({ publicItems, publicVersions } = {}) {
   };
 
   const toolBtn = { background: "none", border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", color: C.textSecondary, fontSize: 13, padding: "5px 10px", display: "flex", alignItems: "center", gap: 6 };
-  const sectionBar = { background: C.headBg, color: C.textPrimary, fontSize: 15, fontWeight: 500, padding: "8px 12px", borderRadius: 8, marginBottom: "1rem" };
 
   return (
     <div ref={rootRef} style={{ background: C.pageBg, minHeight: "100vh", height: isFs ? "100vh" : undefined, overflowY: isFs ? "auto" : undefined, padding: "1.25rem 0.5rem", fontFamily: "var(--font-sans)" }}>
       <h2 className="sr-only">Product roadmap planner</h2>
       <div ref={toolbarRef} style={{ position: "sticky", top: 0, zIndex: 20, background: C.pageBg, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem", padding: "0.75rem 4px", gap: 12, flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          {isPublic
-            ? <div style={{ fontSize: 15, fontWeight: 500, color: C.textPrimary, padding: "0 4px" }}>Roadmap</div>
-            : (
-              <div style={{ display: "inline-flex", gap: 2, background: C.tabBg, border: `1px solid ${C.cardBorder}`, borderRadius: 9, padding: 3 }}>
-                {tabBtn("main", "Main")}
-                {tabBtn("versions", "Versions")}
-              </div>
-            )}
-          {(isPublic ? crumb.section : crumb.group) && (
+          <div style={{ display: "inline-flex", gap: 2, background: C.tabBg, border: `1px solid ${C.cardBorder}`, borderRadius: 9, padding: 3 }}>
+            {isPublic
+              ? <>{tabBtn("planned", "Planned versions")}{tabBtn("roadmap", "Roadmap")}{tabBtn("released", "Released versions")}</>
+              : <>{tabBtn("main", "Main")}{tabBtn("versions", "Versions")}</>}
+          </div>
+          {crumb.group && (
             <span style={{ fontSize: 14, fontWeight: 500, color: C.textSecondary, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-              {isPublic ? ` / ${crumb.section}${crumb.group ? ` / ${crumb.group}` : ""}` : crumb.group}
+              {crumb.group}
             </span>
           )}
           {anyDesc && (
@@ -860,28 +856,39 @@ export default function App({ publicItems, publicVersions } = {}) {
         );
       })()}
 
-      {isPublic && sortedVersions.length > 0 && <div data-crumb="Versions" data-crumb-level="section" style={sectionBar}>Versions</div>}
-
-      {view === "versions" && (
+      {!isPublic && view === "versions" && (
         sortedVersions.length === 0
-          ? (!isPublic ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No versions yet. Add one with the "Add version" button above.</div> : null)
+          ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No versions yet. Add one with the "Add version" button above.</div>
           : sortedVersions.map(v =>
             GroupCard({ label: v.version, rows: items.filter(i => i.version_id === v.id), allowDrag: false, subtitle: v.description, onEdit: canEdit ? () => openVersionEdit(v) : null, accentColor: v.archived ? C.green : undefined })
           )
       )}
 
-      {isPublic && (() => {
+      {/* Public read-only view: three tabs — planned versions, the unassigned
+          roadmap (Next/Later/Future), and released (archived) versions. */}
+      {isPublic && view === "planned" && (() => {
+        const planned = sortedVersions.filter(v => !v.archived);
+        if (!planned.length) return <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No planned versions.</div>;
+        return planned.map(v =>
+          GroupCard({ label: v.version, rows: items.filter(i => i.version_id === v.id), allowDrag: false, subtitle: v.description })
+        );
+      })()}
+
+      {isPublic && view === "roadmap" && (() => {
         const unassigned = items.filter(i => !i.version_id);
         const groups = [...GROUPS, ...[...new Set(unassigned.map(i => (i.group || "").trim()))].filter(g => g && !GROUPS.includes(g))]
           .filter(g => unassigned.some(i => (i.group || "").trim() === g));
-        if (!groups.length) return null;
-        return (
-          <>
-            <div data-crumb="Unassigned initiatives" data-crumb-level="section" style={sectionBar}>Unassigned initiatives</div>
-            {groups.map(group =>
-              GroupCard({ label: group, rows: unassigned.filter(i => (i.group || "").trim() === group), allowDrag: false })
-            )}
-          </>
+        if (!groups.length) return <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No initiatives here yet.</div>;
+        return groups.map(group =>
+          GroupCard({ label: group, rows: unassigned.filter(i => (i.group || "").trim() === group), allowDrag: false })
+        );
+      })()}
+
+      {isPublic && view === "released" && (() => {
+        const released = sortedVersions.filter(v => v.archived);
+        if (!released.length) return <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No released versions yet.</div>;
+        return released.map(v =>
+          GroupCard({ label: v.version, rows: items.filter(i => i.version_id === v.id), allowDrag: false, subtitle: v.description, accentColor: C.green })
         );
       })()}
 

@@ -81,8 +81,11 @@ direct-write pattern as auth (no debounce): the edit/add dialog writes on Save.
   read-only, no auth, no Supabase from the browser).
 - Public view lives at `/v/<SHARE_TOKEN>`: the server component reads all
   `initiatives` and `versions` rows with the **secret key** and passes them in.
-  Wrong token → 404. It shows version groups (with descriptions, no edit button)
-  plus an "Unassigned initiatives" section (all initiatives are exposed on this URL).
+  Wrong token → 404. It uses the same tab control as the editor, with three tabs:
+  **Planned versions** (non-archived versions, default), **Roadmap** (unassigned
+  initiatives in Next/Later/Future), and **Released versions** (archived versions,
+  green headers). All initiatives are exposed on this URL. Public `view` state uses
+  `"planned"`/`"roadmap"`/`"released"`; private uses `"main"`/`"versions"`.
 
 ## Conventions & gotchas
 

@@ -34,12 +34,12 @@ function confidenceOf(item) {
 const PALETTES = {
   dark: {
     pageBg: "#15171f", cardBg: "#1f2230", cardBorder: "#363a4a", headBg: "#272b3a", rowBorder: "#2e3242",
-    textPrimary: "#e8e8ea", textSecondary: "#a0a2ad", textTertiary: "#6d7080", accent: "#7aa2f7",
+    textPrimary: "#e8e8ea", textSecondary: "#a0a2ad", textTertiary: "#6d7080", accent: "#7aa2f7", green: "#5cc98a",
     rowDrag: "#272b3a", inputBg: "#272b3a", shadow: "0 1px 3px rgba(0,0,0,0.4)", tabBg: "#1f2230",
   },
   light: {
     pageBg: "#faf9f5", cardBg: "#ffffff", cardBorder: "#e6e4dd", headBg: "#f6f5f1", rowBorder: "#eeede8",
-    textPrimary: "#1a1a18", textSecondary: "#6b6a64", textTertiary: "#9c9b94", accent: "#2f6fdb",
+    textPrimary: "#1a1a18", textSecondary: "#6b6a64", textTertiary: "#9c9b94", accent: "#2f6fdb", green: "#1f9d57",
     rowDrag: "#f6f5f1", inputBg: "#ffffff", shadow: "0 1px 2px rgba(0,0,0,0.04)", tabBg: "#ffffff",
   },
 };
@@ -194,7 +194,12 @@ async function loadVersions() {
 }
 
 function sortVersions(list) {
-  return [...list].sort((a, b) => (a.version || "").localeCompare(b.version || "", undefined, { numeric: true }));
+  // Archived versions sink to the bottom; within each bucket, sort by number.
+  return [...list].sort((a, b) => {
+    const aa = a.archived ? 1 : 0, ba = b.archived ? 1 : 0;
+    if (aa !== ba) return aa - ba;
+    return (a.version || "").localeCompare(b.version || "", undefined, { numeric: true });
+  });
 }
 
 // When `publicItems` is passed (by the server-rendered /v/<token> page), the
@@ -399,6 +404,23 @@ export default function App({ publicItems, publicVersions } = {}) {
         if (error) throw error;
       } catch (e) { console.error("version update failed:", e); }
     }
+    setVersionEditFor(null);
+  }
+  // Archive / unarchive the version being edited. Also persists any pending
+  // draft edits (version/description) so nothing typed in the dialog is lost.
+  async function toggleVersionArchived() {
+    const id = versionEditFor;
+    if (id === "new") return;
+    const v = versions.find(x => x.id === id);
+    if (!v) return;
+    const archived = !v.archived;
+    const text = versionDraft.version.trim() || v.version;
+    const description = versionDraft.description || "";
+    setVersions(list => list.map(x => x.id === id ? { ...x, version: text, description, archived } : x));
+    try {
+      const { error } = await supabase.from("versions").update({ version: text, description, archived }).eq("id", id);
+      if (error) throw error;
+    } catch (e) { console.error("version archive toggle failed:", e); }
     setVersionEditFor(null);
   }
 
@@ -662,7 +684,8 @@ export default function App({ publicItems, publicVersions } = {}) {
     );
   }
 
-  function GroupCard({ label, rows, allowDrag, subtitle, onEdit }) {
+  function GroupCard({ label, rows, allowDrag, subtitle, onEdit, accentColor }) {
+    const acc = accentColor || C.accent;
     const collapseKey = view + ":" + label;
     const isCollapsed = collapsed[collapseKey];
     const isGroupDropTarget = allowDrag && overInfo.group === label && overInfo.id === null;
@@ -670,8 +693,8 @@ export default function App({ publicItems, publicVersions } = {}) {
       <div key={collapseKey} style={{ marginBottom: "1.75rem" }}>
         <div data-crumb={label} data-crumb-level="group" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px", cursor: "pointer" }}
           onClick={() => setCollapsed(c => ({ ...c, [collapseKey]: !c[collapseKey] }))}>
-          <span style={{ color: C.accent, display: "inline-flex" }}><Icon name={isCollapsed ? "chevron-right" : "chevron-down"} size={15} /></span>
-          <span style={{ fontWeight: 500, fontSize: 15, color: C.accent }}>{label}</span>
+          <span style={{ color: acc, display: "inline-flex" }}><Icon name={isCollapsed ? "chevron-right" : "chevron-down"} size={15} /></span>
+          <span style={{ fontWeight: 500, fontSize: 15, color: acc }}>{label}</span>
           <span style={{ fontSize: 12, color: C.textTertiary, fontWeight: 400 }}>{rows.length}</span>
           {subtitle && subtitle.trim() && (
             <span style={{ fontSize: 13, color: C.textSecondary, fontWeight: 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{subtitle}</span>
@@ -819,9 +842,23 @@ export default function App({ publicItems, publicVersions } = {}) {
         </div>
       </div>
 
-      {!isPublic && view === "main" && [...GROUPS, ...[...new Set(items.map(i => (i.group || "").trim()))].filter(g => g && !GROUPS.includes(g))].map(group =>
-        GroupCard({ label: group, rows: items.filter(i => (i.group || "").trim() === group), allowDrag: canEdit })
-      )}
+      {!isPublic && view === "main" && (() => {
+        // Initiatives whose version is archived leave their normal group and
+        // collect at the bottom under "Released".
+        const archivedVids = new Set(versions.filter(v => v.archived).map(v => v.id));
+        const isReleased = i => i.version_id && archivedVids.has(i.version_id);
+        const active = items.filter(i => !isReleased(i));
+        const released = items.filter(isReleased).sort((a, b) => a.position - b.position);
+        const groups = [...GROUPS, ...[...new Set(active.map(i => (i.group || "").trim()))].filter(g => g && !GROUPS.includes(g))];
+        return (
+          <>
+            {groups.map(group =>
+              GroupCard({ label: group, rows: active.filter(i => (i.group || "").trim() === group), allowDrag: canEdit })
+            )}
+            {released.length > 0 && GroupCard({ label: "Released", rows: released, allowDrag: false, accentColor: C.green })}
+          </>
+        );
+      })()}
 
       {isPublic && sortedVersions.length > 0 && <div data-crumb="Versions" data-crumb-level="section" style={sectionBar}>Versions</div>}
 
@@ -829,7 +866,7 @@ export default function App({ publicItems, publicVersions } = {}) {
         sortedVersions.length === 0
           ? (!isPublic ? <div style={{ padding: "2rem 4px", fontSize: 13, color: C.textSecondary }}>No versions yet. Add one with the "Add version" button above.</div> : null)
           : sortedVersions.map(v =>
-            GroupCard({ label: v.version, rows: items.filter(i => i.version_id === v.id), allowDrag: false, subtitle: v.description, onEdit: canEdit ? () => openVersionEdit(v) : null })
+            GroupCard({ label: v.version, rows: items.filter(i => i.version_id === v.id), allowDrag: false, subtitle: v.description, onEdit: canEdit ? () => openVersionEdit(v) : null, accentColor: v.archived ? C.green : undefined })
           )
       )}
 
@@ -882,11 +919,23 @@ export default function App({ publicItems, publicVersions } = {}) {
               <input autoFocus placeholder="2.0" value={versionDraft.version} onChange={e => setVersionDraft(d => ({ ...d, version: e.target.value }))} style={inputStyle} />
               <label style={{ fontSize: 12, color: C.textSecondary, display: "block", marginTop: 12, marginBottom: 4 }}>Description</label>
               <AutoTextarea val={versionDraft.description} onChange={v => setVersionDraft(d => ({ ...d, description: v }))} C={C} placeholder="What's in this version…" />
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
-                <button onClick={() => setVersionEditFor(null)}
-                  style={{ background: "none", color: C.textSecondary, border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", fontSize: 13, padding: "6px 14px" }}>Cancel</button>
-                <button onClick={saveVersionDraft} disabled={!versionDraft.version.trim()}
-                  style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 8, cursor: versionDraft.version.trim() ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 500, padding: "6px 14px", opacity: versionDraft.version.trim() ? 1 : 0.5 }}>Save</button>
+              <div style={{ display: "flex", justifyContent: isNewV ? "flex-end" : "space-between", alignItems: "center", gap: 8, marginTop: 18 }}>
+                {!isNewV && (() => {
+                  const v = versions.find(x => x.id === versionEditFor);
+                  const isArch = !!(v && v.archived);
+                  return (
+                    <button onClick={toggleVersionArchived}
+                      style={{ background: "none", color: C.textSecondary, border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", fontSize: 13, padding: "6px 14px" }}>
+                      {isArch ? "Unarchive version" : "Archive version"}
+                    </button>
+                  );
+                })()}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setVersionEditFor(null)}
+                    style={{ background: "none", color: C.textSecondary, border: `1px solid ${C.cardBorder}`, borderRadius: 8, cursor: "pointer", fontSize: 13, padding: "6px 14px" }}>Cancel</button>
+                  <button onClick={saveVersionDraft} disabled={!versionDraft.version.trim()}
+                    style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 8, cursor: versionDraft.version.trim() ? "pointer" : "not-allowed", fontSize: 13, fontWeight: 500, padding: "6px 14px", opacity: versionDraft.version.trim() ? 1 : 0.5 }}>Save</button>
+                </div>
               </div>
             </div>
           </div>

@@ -203,6 +203,23 @@ where roadmap.id = 'main';
 
 ---
 
+## Archiving versions
+
+Once a version ships, archive it from its **Edit version** dialog (the
+"Archive version" button, left of Cancel/Save; it reads "Unarchive version"
+for an already-archived one). Archived versions sink to the bottom of the
+Versions view with a **green** arrow and label, and on the **Main** view the
+initiatives belonging to them are collected at the bottom in a "Released"
+group.
+
+Run once in the SQL Editor to add the flag:
+
+```sql
+alter table versions add column if not exists archived boolean not null default false;
+```
+
+---
+
 ## Central versions table — supersedes free-text `initiatives.version`
 
 Versions are now a first-class entity (a version number + a description),

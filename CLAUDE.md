@@ -39,7 +39,11 @@ tabs editing different items don't clobber each other.
 `link`, `position double precision`, `updated_at`.
 
 `versions` (one row per version, managed from the Versions tab): `id uuid`,
-`version text` (short label, e.g. "2.0"), `description text`, `created_at`.
+`version text` (short label, e.g. "2.0"), `description text`, `created_at`,
+`archived boolean` (default false). Archived versions sort to the bottom of the
+Versions view with a **green** header (`C.green`); on the Main view their
+initiatives leave their normal group and collect in a bottom "Released" card.
+Toggled from the version's edit dialog (Archive / Unarchive button).
 Versions are central — initiatives reference a version **by id**, not by
 matching text, so renaming a version's number (via its edit dialog) updates
 everywhere it's used instead of orphaning old rows. Managed with the same

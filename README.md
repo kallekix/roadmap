@@ -23,9 +23,13 @@ all on free tiers. Styling is plain inline styles; no Tailwind, no build magic.
 
 ---
 
-## Step 1 — Install dependencies
+## Step 1 — Get the code and install dependencies
+
+Clone your repo (the one "Use this template" created in your account) and install:
 
 ```bash
+git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git
+cd YOUR-REPO
 npm install
 ```
 

@@ -20,9 +20,10 @@ with a private owner editor and a public read-only share link.
 
 ## Environment / running
 
-- **Node 24 LTS is installed** (official installer; no brew/nvm). Run `npm run build`
-  before pushing. Dev server for the browser pane: `roadmap-dev` in
-  `.claude/launch.json`, on **port 3001** (3000 is reserved for the Absence app).
+- **Requires Node 20+** to run or build. If `npm` isn't available, install Node
+  first (README has the link). Build with `npm run build` before pushing; `npm run
+  dev` serves it locally (default port 3000). You can edit files without Node, but
+  can't run or build the app without it.
 - Env vars (`.env.local`, mirrored in Vercel; see `.env.local.example`):
   `NEXT_PUBLIC_OWNER_EMAIL` (the one editor's email; must match the RLS policies),
   `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (a `sb_publishable_…` key),
@@ -105,7 +106,7 @@ direct-write pattern as auth (no debounce): the edit/add dialog writes on Save.
 
 ## Deploy / test loop
 
-1. Edit files. 2. `npm run build`, and preview with `roadmap-dev` when relevant.
+1. Edit files. 2. `npm run build` to check it compiles; `npm run dev` to preview.
 3. Commit + push to `main`; Vercel auto-deploys.
 4. **Always confirm the Vercel deployment built the new commit** before checking the
    live site — a silent non-build once caused "my change didn't show up".

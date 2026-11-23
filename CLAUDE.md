@@ -23,10 +23,15 @@ with a private owner editor and a public read-only share link.
 - **Node 24 LTS is installed** (official installer; no brew/nvm). Run `npm run build`
   before pushing. Dev server for the browser pane: `roadmap-dev` in
   `.claude/launch.json`, on **port 3001** (3000 is reserved for the Absence app).
-- Env vars (`.env.local`, mirrored in Vercel): `NEXT_PUBLIC_SUPABASE_URL`,
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY` (a `sb_publishable_…` key),
+- Env vars (`.env.local`, mirrored in Vercel; see `.env.local.example`):
+  `NEXT_PUBLIC_OWNER_EMAIL` (the one editor's email; must match the RLS policies),
+  `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (a `sb_publishable_…` key),
   `SUPABASE_SERVICE_ROLE_KEY` (a `sb_secret_…` key, server-only, never `NEXT_PUBLIC_`),
   `SHARE_TOKEN` (obscure token for the public URL).
+- **First-time / fresh install**: `README.md` is the step-by-step setup guide and
+  `schema.sql` is the complete DB schema (both tables + RLS, owner email as a
+  `you@example.com` placeholder). The repo is a GitHub **template** meant to be
+  cloned into independent single-owner instances.
 
 ## Data model — `initiatives` and `versions` tables
 
@@ -71,9 +76,9 @@ direct-write pattern as auth (no debounce): the edit/add dialog writes on Save.
 
 ## Security model
 
-- The owner email is `kalle@paulsson.net`, hardcoded as `OWNER_EMAIL` in `app/page.js`
-  **and** in the RLS policies. Changing editors means updating both (or moving to an
-  `editors` table).
+- The owner email comes from `NEXT_PUBLIC_OWNER_EMAIL` (read into `OWNER_EMAIL` in
+  `app/page.js`) **and** is baked into the RLS policies in `schema.sql`. Changing the
+  owner means updating both the env var (local + Vercel) and re-running the policies.
 - RLS on `initiatives` is **owner-only for select/insert/update/delete** (email match
   via `auth.jwt() ->> 'email'`). The publishable key alone can read nothing.
 - Three UI modes in `App`: owner (full editor), signed-out (sign-in gate, no data),
@@ -104,7 +109,8 @@ direct-write pattern as auth (no debounce): the edit/add dialog writes on Save.
 3. Commit + push to `main`; Vercel auto-deploys.
 4. **Always confirm the Vercel deployment built the new commit** before checking the
    live site — a silent non-build once caused "my change didn't show up".
-5. Schema changes are run by the user in the Supabase SQL Editor (see `README.md`).
+5. Schema changes are run by the user in the Supabase SQL Editor. `schema.sql` is
+   the canonical full schema — update it there too so a fresh install stays correct.
 
 ## Realtime — not yet
 

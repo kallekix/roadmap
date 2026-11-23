@@ -1,261 +1,117 @@
-# Roadmap Planner — deploy to Vercel + Supabase
+# Roadmap Planner
 
-A Next.js port of the roadmap artifact. Data is stored as a single shared JSON
-document in Supabase, so everyone with the link sees and edits the same roadmap.
+A small single-owner product-roadmap app: a table of initiatives scored by
+**Ease × Impact × Confidence**, grouped into Next / Later / Future and organised
+into versions. You get a **private editor** (only you can sign in and edit) plus
+an optional **public read-only link** you can share with anyone.
+
+Built with **Next.js** + **Supabase** (database + auth) + **Vercel** (hosting) —
+all on free tiers. Styling is plain inline styles; no Tailwind, no build magic.
+
+> Deploying your own copy? Follow the steps below. You can also hand this whole
+> repo to Claude Code (`CLAUDE.md` orients it) and have it walk you through — but
+> you'll still need to do the account/click steps yourself.
 
 ---
 
-## Step 0 — Install Node.js (one time)
+## What you'll need
 
-This machine doesn't have Node yet. Install the LTS version:
+- **Node.js 20+** — <https://nodejs.org> (LTS) or `brew install node`. Check with `node -v`.
+- A free **Supabase** account — <https://supabase.com>
+- A free **Vercel** account — <https://vercel.com>
+- This repo (you're reading it — if you used "Use this template", you already have your own copy).
 
-- Download the macOS installer from <https://nodejs.org> (the "LTS" button), **or**
-- If you use Homebrew: `brew install node`
-
-Then open a **new** terminal and confirm:
-
-```bash
-node -v   # should print v20.x or v22.x
-npm -v
-```
+---
 
 ## Step 1 — Install dependencies
 
 ```bash
-cd ~/Documents/Claude/roadmap
 npm install
 ```
 
-## Step 2 — Create the Supabase project + table
+## Step 2 — Create the Supabase project + tables
 
-1. Go to <https://supabase.com/dashboard> → **New project**. Pick a name, a strong
-   database password (save it), and the closest region. Wait ~2 minutes.
-2. Open **SQL Editor → New query**, paste the following, and click **Run**:
+1. <https://supabase.com/dashboard> → **New project**. Pick a name, a strong
+   database password (save it), the closest region. Wait ~2 minutes.
+2. Open **`schema.sql`** from this repo. Replace every `you@example.com` with the
+   email you'll sign in with (Find & Replace → Replace all).
+3. In Supabase, open **SQL Editor → New query**, paste the edited `schema.sql`,
+   and click **Run**. This creates the `versions` and `initiatives` tables and
+   locks all access to your email.
 
-   ```sql
-   -- One shared roadmap document, keyed by a fixed id 'main'.
-   create table if not exists roadmap (
-     id         text primary key,
-     items      jsonb not null default '[]'::jsonb,
-     updated_at timestamptz default now()
-   );
+## Step 3 — Create your owner login
 
-   alter table roadmap enable row level security;
+The app has no sign-up screen — you create the single owner user by hand:
 
-   -- SHARED-BOARD policies: anyone with the anon key can read & write the doc.
-   -- Fine for an internal/trusted team board. See "Locking it down" below.
-   create policy "public read"   on roadmap for select using (true);
-   create policy "public insert" on roadmap for insert with check (true);
-   create policy "public update" on roadmap for update using (true) with check (true);
+1. Supabase → **Authentication → Users → Add user → Create new user**.
+2. Use the **same email** as in Step 2, set a password, and tick **Auto Confirm
+   User** (so you can sign in immediately).
+
+## Step 4 — Configure environment variables
+
+1. In Supabase, go to **Project Settings → API** and copy the **Project URL**,
+   the **publishable** key, and the **secret** key.
+2. In this repo:
+
+   ```bash
+   cp .env.local.example .env.local
    ```
 
-   (No row is seeded — the app creates the `main` row automatically on first save,
-   starting from the built-in default items.)
+   Then fill in `.env.local`:
 
-3. Go to **Project Settings → API** and copy two values:
-   - **Project URL**
-   - **anon / public** key
+   | Variable | Value |
+   |---|---|
+   | `NEXT_PUBLIC_OWNER_EMAIL` | the email from Steps 2 & 3 |
+   | `NEXT_PUBLIC_SUPABASE_URL` | Project URL (just the `https://…supabase.co` origin) |
+   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | the **publishable** key |
+   | `SUPABASE_SERVICE_ROLE_KEY` | the **secret** key (server-only, never exposed) |
+   | `SHARE_TOKEN` | a long random string — `openssl rand -hex 20` |
 
-## Step 3 — Add your Supabase keys locally
+   `.env.local` is gitignored, so your keys are never committed.
 
-Edit `.env.local` (already created) and replace the placeholders with the two
-values from Step 2:
-
-```bash
-NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT-REF.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-public-key
-```
-
-## Step 4 — Run locally
+## Step 5 — Run it locally
 
 ```bash
 npm run dev
 ```
 
-Open <http://localhost:3000>. Add/edit/drag items, then refresh — they should
-persist. Check **Table Editor → roadmap** in Supabase to see the `main` row.
-
-## Step 5 — Push to GitHub
-
-```bash
-git init
-git add -A
-git commit -m "Roadmap planner: Next.js + Supabase"
-# then create a repo on github.com and:
-git remote add origin https://github.com/<you>/roadmap.git
-git branch -M main
-git push -u origin main
-```
-
-`.env.local` is gitignored — your keys will NOT be committed. Good.
+Open <http://localhost:3000>, sign in with your owner email + password, and add
+some initiatives. The public read-only view is at
+<http://localhost:3000/v/YOUR_SHARE_TOKEN>.
 
 ## Step 6 — Deploy to Vercel
 
-1. Go to <https://vercel.com/new>, **Import** the `roadmap` repo. Vercel
-   auto-detects Next.js; no build settings needed.
-2. Expand **Environment Variables** and add the same two as in Step 3:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-3. Click **Deploy**. You'll get a live `*.vercel.app` URL in ~1 minute.
-
-Every future `git push` to `main` auto-deploys.
-
----
-
-## Notes & follow-ups
-
-- **Concurrency is last-write-wins.** Saves are debounced (~600ms). If two people
-  edit at the exact same moment, the later save wins. Fine for a small team. To
-  make edits sync live between open browsers, add Supabase **Realtime** (ask and
-  I'll wire it up — it's a small addition to `app/page.js`).
-- **Locking it down.** The policies above let anyone with the URL edit. To restrict
-  writing to signed-in users, add [Supabase Auth](https://supabase.com/docs/guides/auth)
-  and change the write policies from `with check (true)` to
-  `with check (auth.role() = 'authenticated')`.
-- **Data shape.** Each item: `{ id, title, area, version, ease, impact, confidence, link, group }`.
-  Stored together as one JSON array in `roadmap.items`, preserving drag-and-drop order.
-
----
-
-## Private app + shareable read-only Versions link
-
-The app now runs in three modes:
-
-- **`/` (owner only).** Reads are locked to the owner by RLS, so non-owners get a
-  sign-in screen — never the board or the default items. Sign in to view/edit.
-- **`/v/<SHARE_TOKEN>` (public, read-only).** A server component reads the doc with
-  the secret key, exposes **only items that have a version**, and renders them
-  read-only. Main-only items never reach the browser. Any wrong token → 404.
-
-### Required RLS (run once in SQL Editor)
-
-```sql
--- Reads are owner-only now (the public Versions route uses the secret key instead).
-drop policy if exists "public read" on roadmap;
-create policy "owner read" on roadmap for select
-  using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-```
-
-### Extra environment variables
-
-| Variable | Where | Notes |
-|---|---|---|
-| `SUPABASE_SERVICE_ROLE_KEY` | `.env.local` **and** Vercel | The `sb_secret_…` key. Server-only — no `NEXT_PUBLIC_` prefix, never committed. |
-| `SHARE_TOKEN` | `.env.local` **and** Vercel | Long random string. The public view lives at `/v/<this>`. Change it to revoke the old link. |
+1. Push your repo to GitHub (if you used the template, it's already there).
+2. <https://vercel.com/new> → **Import** your repo. Next.js is auto-detected.
+3. Expand **Environment Variables** and add the **same five** values from your
+   `.env.local` (including `SUPABASE_SERVICE_ROLE_KEY` and `NEXT_PUBLIC_OWNER_EMAIL`).
+4. **Deploy**. You'll get a live `*.vercel.app` URL in ~1 minute. Every future
+   `git push` to `main` auto-deploys.
 
 Share link: `https://<your-app>.vercel.app/v/<SHARE_TOKEN>`
 
 ---
 
-## Normalized storage (one row per initiative) — supersedes the blob
+## How it works
 
-Storage moved from the single `roadmap.items` blob to a normalized `initiatives`
-table (one row per item), so two open tabs editing **different** items no longer
-overwrite each other's whole document. Order is a float `position` (fractional
-rank: a drag is a single-row write). `evidence` (the 9 confidence checkboxes)
-lives as jsonb on the row. Reads stay owner-only; `/v/<token>` reads all rows via
-the secret key.
+- **`/` (owner only).** RLS locks all reads to your email, so anyone who isn't
+  signed in as you gets a sign-in screen — never your data.
+- **`/v/<SHARE_TOKEN>` (public, read-only).** A server component reads the data
+  with the secret key and renders it read-only, in three tabs: Planned versions,
+  Roadmap (unassigned initiatives), and Released versions. Any wrong token → 404.
+  Everything on the board is visible on this URL, so only share it with people
+  who should see the whole roadmap.
+- **Confidence** is derived from weighted evidence checkboxes (not stored).
+- **Archiving a version** (from its edit dialog) moves its initiatives into a
+  "Released" group and sends the version to the bottom.
 
-Run once in the SQL Editor:
+## Tips & gotchas
 
-```sql
--- 1. Normalized table.
-create table if not exists initiatives (
-  id          uuid primary key default gen_random_uuid(),
-  title       text not null default '',
-  description text not null default '',
-  area        text not null default '',
-  version     text not null default '',
-  ease        int  not null default 0,
-  impact      int  not null default 0,
-  evidence    jsonb not null default '{}'::jsonb,
-  "group"     text not null default 'Next',
-  link        text not null default '',
-  position    double precision not null default 0,
-  updated_at  timestamptz not null default now()
-);
-
-alter table initiatives enable row level security;
-create policy "owner read"   on initiatives for select using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-create policy "owner insert" on initiatives for insert with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-create policy "owner update" on initiatives for update using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net') with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-create policy "owner delete" on initiatives for delete using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-
--- 2. Migrate the existing blob (roadmap.items) into rows, preserving order.
-insert into initiatives (title, description, area, version, ease, impact, evidence, link, "group", position)
-select
-  coalesce(e->>'title', ''),
-  coalesce(e->>'description', ''),
-  coalesce(e->>'area', ''),
-  coalesce(e->>'version', ''),
-  coalesce((e->>'ease')::numeric, 0)::int,
-  coalesce((e->>'impact')::numeric, 0)::int,
-  coalesce(e->'evidence', '{}'::jsonb),
-  coalesce(e->>'link', ''),
-  coalesce(nullif(e->>'group', ''), 'Next'),
-  ord
-from roadmap, jsonb_array_elements(items) with ordinality as t(e, ord)
-where roadmap.id = 'main';
-
--- 3. AFTER verifying the app works against the new table, optionally:
--- drop table roadmap;
-```
-
----
-
-## Archiving versions
-
-Once a version ships, archive it from its **Edit version** dialog (the
-"Archive version" button, left of Cancel/Save; it reads "Unarchive version"
-for an already-archived one). Archived versions sink to the bottom of the
-Versions view with a **green** arrow and label, and on the **Main** view the
-initiatives belonging to them are collected at the bottom in a "Released"
-group.
-
-Run once in the SQL Editor to add the flag:
-
-```sql
-alter table versions add column if not exists archived boolean not null default false;
-```
-
----
-
-## Central versions table — supersedes free-text `initiatives.version`
-
-Versions are now a first-class entity (a version number + a description),
-managed from the Versions tab. Initiatives reference a version by id
-(`version_id`), not by matching text, so renaming a version's number in its
-edit dialog updates everywhere it's used instead of orphaning old rows.
-
-Run once in the SQL Editor:
-
-```sql
--- 1. Central versions table.
-create table if not exists versions (
-  id          uuid primary key default gen_random_uuid(),
-  version     text not null default '',
-  description text not null default '',
-  created_at  timestamptz not null default now()
-);
-
-alter table versions enable row level security;
-create policy "owner read"   on versions for select using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-create policy "owner insert" on versions for insert with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-create policy "owner update" on versions for update using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net') with check ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-create policy "owner delete" on versions for delete using ((auth.jwt() ->> 'email') = 'kalle@paulsson.net');
-
--- 2. Migrate existing free-text initiatives.version values into rows.
-insert into versions (version)
-select distinct trim(version) from initiatives where trim(version) <> '';
-
--- 3. Point initiatives at the new table.
-alter table initiatives add column if not exists version_id uuid references versions(id) on delete set null;
-
-update initiatives i
-set version_id = v.id
-from versions v
-where trim(i.version) = v.version and trim(i.version) <> '';
-
--- 4. AFTER verifying the app works against version_id, drop the old text column:
--- alter table initiatives drop column version;
-```
+- **To revoke a public link**, change `SHARE_TOKEN` (locally and in Vercel). The
+  old URL immediately 404s.
+- **To change the owner later**, update `NEXT_PUBLIC_OWNER_EMAIL` (local + Vercel)
+  *and* re-run the RLS policies in `schema.sql` with the new email.
+- **After a deploy, confirm Vercel actually built your latest commit** (Deployments
+  tab) before deciding a change "didn't show up".
+- CSV **Import/Export** round-trips the whole board, including the evidence
+  checkboxes (one column per factor).

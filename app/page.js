@@ -8,8 +8,10 @@ const GROUPS = ["Next", "Later", "Future"];
 
 // Only this signed-in user may edit. Everyone else (including logged-out
 // visitors) is read-only. The real enforcement lives in Supabase RLS — this
-// constant just drives the UI so non-editors don't see dead controls.
-const OWNER_EMAIL = "kalle@paulsson.net";
+// constant just drives the UI so non-editors don't see dead controls. Set it
+// once via NEXT_PUBLIC_OWNER_EMAIL (see .env.local.example); it must match the
+// email used in the RLS policies in schema.sql.
+const OWNER_EMAIL = process.env.NEXT_PUBLIC_OWNER_EMAIL || "";
 
 // Confidence is a derived value: the sum of the weights of the checked evidence
 // factors, capped at 10. Stored per item as item.evidence = { key: bool, ... }.
